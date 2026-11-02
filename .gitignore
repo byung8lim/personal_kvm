@@ -1,0 +1,39 @@
+# Local diagnostics and logs
+.tmp/
+logs/
+*.log
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+known_hosts*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+backend/venv/
+.venv/
+venv/
+
+# Node / browser tests
+frontend/node_modules/
+frontend/test-results/
+frontend/playwright-report/
+npm-debug.log*
+
+# VM and temporary disk artifacts
+*.qcow2
+*.img
+*.iso
+*.part
+
+# Editor / OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

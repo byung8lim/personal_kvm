@@ -1,0 +1,13 @@
+[Unit]
+Description=Renew Personal KVM TLS certificate when near expiry
+After=network-online.target
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/personal-kvm/.env
+ExecStart=/opt/personal-kvm/scripts/renew_tls.sh
+User=root
+Group=root
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/etc/personal-kvm/tls
+NoNewPrivileges=true

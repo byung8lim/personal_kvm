@@ -1,0 +1,39 @@
+[Unit]
+Description=Personal KVM FastAPI backend
+Documentation=http://127.0.0.1:8000/docs
+Wants=network-online.target virtqemud.socket virtnetworkd.socket virtstoraged.socket virtproxyd.socket
+After=network-online.target virtqemud.socket virtnetworkd.socket virtstoraged.socket virtproxyd.socket mysqld.service
+Requires=mysqld.service
+
+[Service]
+Type=simple
+User=pkvm
+Group=pkvm
+SupplementaryGroups=kvm libvirt
+WorkingDirectory=/opt/personal-kvm/backend
+EnvironmentFile=/etc/personal-kvm/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=+/opt/personal-kvm/scripts/ensure_networks.sh
+ExecStart=/opt/personal-kvm/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+KillSignal=SIGINT
+
+# The backend must manage libvirt, VM disk images, and network definitions.
+# These filesystem protections keep the remaining host filesystem read-only.
+ProtectSystem=strict
+ReadWritePaths=/data /data2 /etc/personal-kvm /var/lib/personal-kvm -/run/libvirt -/var/run/libvirt
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=true
+ProtectKernelTunables=true
+# libguestfs/supermin must read the host kernel and /lib/modules to build its
+# appliance.  The unprivileged service user and NoNewPrivileges still prevent
+# the backend from loading kernel modules.
+ProtectKernelModules=false
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

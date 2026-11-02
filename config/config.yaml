@@ -1,0 +1,55 @@
+service:
+  version: "0.0.6"
+  host: "0.0.0.0"
+  port: 8000
+  web_port: 8080
+  libvirt_uri: "qemu:///system"
+  ssh_public_key_path: "/var/lib/personal-kvm/.ssh/id_rsa.pub"
+  overcommit_cpu_ratio: 2.0
+  reserved_host_memory_gb: 4
+
+storage:
+  image_dir: "/data/images"
+  root_disk_dir: "/data/instances"
+  extra_disk_dir: "/data2/disks"
+
+networks:
+  bridged:
+    net_name: "Public-Bridged"
+    net_type: "BRIDGED"
+    bridge_name: "virbr0"
+    physical_nic: "enp3s0"
+    host_ip_cidr: "192.168.0.6/24"
+    cidr: "192.168.0.0/24"
+    gateway: "192.168.0.1"
+    dns: "8.8.8.8"
+    pool_start: "192.168.0.101"
+    pool_end: "192.168.0.200"
+  nat:
+    net_name: "Public-NAT"
+    net_type: "NAT"
+    bridge_name: "virbr1"
+    cidr: "10.10.50.0/24"
+    gateway: "10.10.50.1"
+    dns: "8.8.8.8"
+    pool_start: "10.10.50.101"
+    pool_end: "10.10.50.250"
+  internal:
+    net_name: "Internal-Service"
+    net_type: "INTERNAL"
+    bridge_name: "virbr2"
+    cidr: "10.10.60.0/24"
+    gateway: null
+    dns: null
+    pool_start: "10.10.60.101"
+    pool_end: "10.10.60.250"
+  management:
+    net_name: "Management-Net"
+    net_type: "MANAGEMENT"
+    bridge_name: "virbr3"
+    cidr: "10.10.70.0/24"
+    gateway: null
+    host_bind_ip: "10.10.70.1"
+    dns: null
+    pool_start: "10.10.70.101"
+    pool_end: "10.10.70.250"
