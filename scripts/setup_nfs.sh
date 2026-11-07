@@ -17,7 +17,10 @@ getent passwd pkvm >/dev/null || { echo '[NFS 오류] pkvm 계정이 없습니�
 install -d -o pkvm -g pkvm -m 0770 "$ROOT"
 install -d -m 0755 /etc/exports.d
 # Only explicitly configured management subnet can access this NFS export.
-printf '%s %s(rw,sync,root_squash,no_subtree_check)\n' "$ROOT" "$CIDR" > /etc/exports.d/personal-kvm.exports
+PKVM_UID="$(id -u pkvm)"
+PKVM_GID="$(id -g pkvm)"
+# Map remote identities to the dedicated service account. Never grant root on NFS.
+printf '%s %s(rw,sync,all_squash,anonuid=%s,anongid=%s,no_subtree_check)\n' "$ROOT" "$CIDR" "$PKVM_UID" "$PKVM_GID" > /etc/exports.d/personal-kvm.exports
 chmod 0644 /etc/exports.d/personal-kvm.exports
 exportfs -ra
 systemctl enable --now nfs-server
