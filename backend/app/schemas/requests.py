@@ -18,6 +18,19 @@ class ChangePasswordReq(BaseModel):
             raise ValueError("새 비밀번호에는 대문자·소문자·숫자·특수문자가 모두 필요합니다.")
         return self
 
+class SharedVolumeMountReq(BaseModel):
+    volume_id: int = Field(gt=0)
+    mount_path: str = Field(min_length=2, max_length=200, pattern=r"^/[A-Za-z0-9/_-]+$")
+
+    @model_validator(mode="after")
+    def validate_mount_path(self):
+        from pathlib import PurePosixPath
+        normalized = PurePosixPath(self.mount_path)
+        if ".." in self.mount_path.split("/") or str(normalized) in ("/", "/etc", "/proc", "/sys", "/dev", "/root"):
+            raise ValueError("공유볼륨 마운트 경로는 안전한 전용 절대경로여야 합니다.")
+        return self
+
+
 class CreateInstanceReq(BaseModel):
     name: str = Field(min_length=1, max_length=63, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
     hostname: Optional[str] = Field(default=None, max_length=63, pattern=r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
@@ -31,6 +44,7 @@ class CreateInstanceReq(BaseModel):
     public_net_type: Optional[Literal["BRIDGED", "NAT"]] = "NAT"
     internal_network: bool = True
     management_network: bool = False
+    shared_volumes: list[SharedVolumeMountReq] = Field(default_factory=list, max_length=8)
 
     @property
     def effective_hostname(self) -> str:
@@ -49,6 +63,12 @@ class CreateInstanceReq(BaseModel):
     def validate_networks_and_extra_disk(self):
         if not self.public_net_type and not self.internal_network:
             raise ValueError("Public/NAT 또는 내부서비스 네트워크를 하나 이상 선택해야 합니다.")
+        if self.shared_volumes and not self.management_network:
+            raise ValueError('NFS 공유볼륨 사용 시 Management-Net을 선택해야 합니다.')
+        if len({v.volume_id for v in self.shared_volumes}) != len(self.shared_volumes):
+            raise ValueError('공유볼륨 중복 선택은 허용되지 않습니다.')
+        if len({v.mount_path for v in self.shared_volumes}) != len(self.shared_volumes):
+            raise ValueError('공유볼륨 마운트 경로가 중복되었습니다.')
         if 0 < self.extra_disk_gb < 10:
             raise ValueError("추가 디스크는 0 또는 10~100GB여야 합니다.")
         return self

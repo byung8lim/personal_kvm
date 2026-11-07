@@ -103,7 +103,7 @@ class VmProvisioner:
         if result.returncode:
             raise ProvisioningError(result.stderr.strip() or "게스트 이미지 커스터마이즈 실패")
 
-    def create_cloud_init_seed(self, destination: str, name: str, networks: List[dict], guest_username: str = "kvmadmin", guest_password: str = None, guest_hostname: str = None) -> None:
+    def create_cloud_init_seed(self, destination: str, name: str, networks: List[dict], guest_username: str = "kvmadmin", guest_password: str = None, guest_hostname: str = None, shared_mounts: List[dict] = None, nfs_package: str = None) -> None:
         destination_path = Path(destination)
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as folder:
@@ -133,6 +133,16 @@ class VmProvisioner:
                                  "permissions": "0644", "content": "PasswordAuthentication yes\nPermitRootLogin no\n"}],
                 "runcmd": [["systemctl", "enable", "--now", "sshd"]],
             }
+            if shared_mounts:
+                if nfs_package not in ("nfs-utils", "nfs-common"):
+                    raise ProvisioningError("지원하지 않는 게스트 NFS 패키지입니다.")
+                user_config["packages"] = [nfs_package]
+                user_config["bootcmd"] = [["mkdir", "-p", mount["target"]] for mount in shared_mounts]
+                user_config["mounts"] = [
+                    [mount["source"], mount["target"], "nfs4",
+                     "defaults,_netdev,nofail,x-systemd.automount", "0", "0"]
+                    for mount in shared_mounts
+                ]
             (folder_path / "user-data").write_text("#cloud-config\n" + yaml.safe_dump(user_config, allow_unicode=True, sort_keys=False), encoding="utf-8")
             ethernets = {}
             default_route_added = False
@@ -237,7 +247,7 @@ class VmProvisioner:
 
     def provision(self, name: str, image: str, root_path: str, root_gb: int, extra_path: str,
                   extra_gb: int, memory_gb: int, vcores: int, bridges: List[str], macs: List[str] = None,
-                  network_configs: List[dict] = None, seed_path: str = None, guest_username: str = "kvmadmin", guest_password: str = None, progress=None, guest_hostname: str = None) -> None:
+                  network_configs: List[dict] = None, seed_path: str = None, guest_username: str = "kvmadmin", guest_password: str = None, progress=None, guest_hostname: str = None, shared_mounts: List[dict] = None, nfs_package: str = None) -> None:
         created = []
         defined = False
         try:
@@ -251,7 +261,7 @@ class VmProvisioner:
                 self.create_empty_disk(extra_path, extra_gb); created.append(extra_path); disks.append(extra_path)
             if network_configs and seed_path:
                 if progress: progress("CLOUD_INIT", "계정 및 네트워크 설정 ISO 생성 중")
-                self.create_cloud_init_seed(seed_path, name, network_configs, guest_username, guest_password, guest_hostname=guest_hostname); created.append(seed_path)
+                self.create_cloud_init_seed(seed_path, name, network_configs, guest_username, guest_password, guest_hostname=guest_hostname, shared_mounts=shared_mounts, nfs_package=nfs_package); created.append(seed_path)
             if progress: progress("DEFINE", "libvirt 도메인 등록 중")
             self.libvirt.define_xml(self.domain_xml(name, memory_gb, vcores, disks, bridges, macs, seed_path)); defined = True
             self.libvirt.autostart(name, True)

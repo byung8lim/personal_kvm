@@ -421,7 +421,7 @@ _CREATE_PHASES = {"QUEUED": "생성 대기", "ROOT_DISK": "루트 디스크 생�
 
 def _create_worker(instance_id, operation_uuid, instance_name, image_path, root_path, root_gb,
                    extra_path, extra_gb, memory_gb, vcores, bridges, macs, network_configs,
-                   seed_path, guest_username, guest_password, dns_hostname):
+                   seed_path, guest_username, guest_password, dns_hostname, shared_mounts, nfs_package):
     # Never share a request-scoped Session across threads.
     session = SessionLocal()
     provisioned = False
@@ -440,7 +440,7 @@ def _create_worker(instance_id, operation_uuid, instance_name, image_path, root_
         vm_provisioner.provision(instance_name, image_path, root_path, root_gb, extra_path,
                                  extra_gb, memory_gb, vcores, bridges, macs, network_configs,
                                  seed_path, guest_username, guest_password, progress=progress,
-                                 guest_hostname=dns_hostname)
+                                 guest_hostname=dns_hostname, shared_mounts=shared_mounts, nfs_package=nfs_package)
         provisioned = True
         instance = session.query(Instance).filter(Instance.id == instance_id).one()
         updater = configured_ddns()
@@ -552,6 +552,26 @@ def create_instance(req: CreateInstanceReq, db: Session = Depends(get_db), _admi
         db.rollback()
         raise HTTPException(status_code=409, detail="필수 네트워크 IP 풀이 고갈되었습니다.")
 
+    shared_mounts = []
+    if req.shared_volumes:
+        if not mgmt_net or not mgmt_ip:
+            db.rollback()
+            raise HTTPException(status_code=422, detail="공유볼륨에는 Management-Net이 필요합니다.")
+        nfs_root = (runtime_config().get("nfs") or {}).get("NFS_DIR")
+        nfs_host = (runtime_config().get("networks") or {}).get("management", {}).get("host_bind_ip")
+        if not nfs_root or not nfs_host:
+            db.rollback()
+            raise HTTPException(status_code=503, detail="NFS_DIR 또는 Management-Net 서버 IP가 설정되지 않았습니다.")
+        for mount in req.shared_volumes:
+            volume = db.query(ManagedNfsVolume).filter(
+                ManagedNfsVolume.id == mount.volume_id,
+                ManagedNfsVolume.status == "READY").first()
+            if not volume:
+                db.rollback()
+                raise HTTPException(status_code=404, detail=f"공유볼륨 {mount.volume_id}을 찾을 수 없습니다.")
+            shared_mounts.append({"volume_id":volume.id, "target":mount.mount_path,
+                                  "source":f"{nfs_host}:{volume.file_path}"})
+
     inst = Instance(
         instance_uuid=str(uuid.uuid4()),
         name=req.name,
@@ -569,6 +589,9 @@ def create_instance(req: CreateInstanceReq, db: Session = Depends(get_db), _admi
     )
     db.add(inst)
     db.flush()
+    for mount in shared_mounts:
+        db.add(ManagedNfsMount(volume_id=mount["volume_id"], instance_id=inst.id,
+                               target_path=mount["target"], status="PLANNED"))
     for ip_r in [pub_ip, priv_ip, mgmt_ip]:
         if ip_r:
             ip_r.instance_id = inst.id
@@ -637,7 +660,8 @@ def create_instance(req: CreateInstanceReq, db: Session = Depends(get_db), _admi
     args = (instance_id, operation_uuid, instance_name, image.file_path, root_path,
             req.root_disk_gb, extra_path, req.extra_disk_gb, req.memory_gb, req.vcores,
             [net.bridge_name for net, _, _ in selected], macs, network_configs, seed_path,
-            req.guest_username, req.guest_password, req.effective_hostname)
+            req.guest_username, req.guest_password, req.effective_hostname,
+            shared_mounts, "nfs-common" if image.linux_type.lower().startswith("ubuntu") else "nfs-utils")
     try:
         threading.Thread(target=_create_worker, args=args, daemon=True,
                          name=f"vm-create-{instance_id}").start()
