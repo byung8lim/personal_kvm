@@ -1,5 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Legacy entrypoint. One implementation path for Rocky Linux 9.x and 10.x.
+# The former script disabled firewalld/SELinux and overwrote hostname;
+# those actions are unsafe for managed KVM servers and are no longer performed.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ "${EUID}" -ne 0 ]; then
     echo "[오류] install.sh는 반드시 root 권한(sudo)으로 실행해야 합니다."
@@ -44,3 +48,5 @@ dnf -y install net-tools bind-utils telnet wget curl tar zip unzip hostname chro
 
 systemctl enable --now chronyd
 systemctl enable --now NetworkManager
+
+exec "${SCRIPT_DIR}/install.sh" "$@"

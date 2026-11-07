@@ -33,11 +33,20 @@ fi
 # 도메인이 해제된 뒤 관리 스토리지의 물리 파일을 먼저 회수한다.
 rm -rf /data/instances/* /data2/disks/* /data/images/*
 
-if systemctl is-active --quiet mysqld; then
+DB_UNIT=''
+DB_CLI=''
+DB_DUMP=''
+if systemctl is-active --quiet mariadb.service; then DB_UNIT=mariadb.service
+elif systemctl is-active --quiet mysqld.service; then DB_UNIT=mysqld.service; fi
+if command -v mariadb >/dev/null 2>&1; then DB_CLI=mariadb
+elif command -v mysql >/dev/null 2>&1; then DB_CLI=mysql; fi
+if command -v mariadb-dump >/dev/null 2>&1; then DB_DUMP=mariadb-dump
+elif command -v mysqldump >/dev/null 2>&1; then DB_DUMP=mysqldump; fi
+if [ -n "$DB_UNIT" ] && [ -n "$DB_CLI" ] && [ -n "$DB_DUMP" ]; then
     AUDIT_DIR="/var/lib/personal-kvm/uninstall-audit"
     mkdir -p "${AUDIT_DIR}"
     AUDIT_FILE="${AUDIT_DIR}/personal_kvm_$(date +%Y%m%d_%H%M%S).sql"
-    mysql -u root <<MYSQL_EOF || true
+    "${DB_CLI}" -u root <<MYSQL_EOF || true
 USE personal_kvm;
 UPDATE instances SET state='DELETED', public_ip=NULL, private_ip=NULL, mgmt_ip=NULL WHERE state <> 'DELETED';
 UPDATE virtual_disks SET status='DELETED', is_assigned=0 WHERE status <> 'DELETED';
@@ -45,9 +54,9 @@ UPDATE ip_pools SET status='AVAILABLE', instance_id=NULL, assigned_at=NULL WHERE
 UPDATE virtual_networks SET assigned_ips=0;
 UPDATE resource_operations SET status='FAILED', error_message='service uninstalled before operation completion', completed_at=NOW() WHERE status IN ('PENDING','RUNNING');
 MYSQL_EOF
-    mysqldump -u root --single-transaction personal_kvm > "${AUDIT_FILE}"
+    "${DB_DUMP}" -u root --single-transaction personal_kvm > "${AUDIT_FILE}"
     chmod 0600 "${AUDIT_FILE}"
-    mysql -u root <<MYSQL_EOF
+    "${DB_CLI}" -u root <<MYSQL_EOF
 DROP DATABASE IF EXISTS personal_kvm;
 DROP USER IF EXISTS 'pkvm_user'@'127.0.0.1';
 DROP USER IF EXISTS 'pkvm_user'@'localhost';

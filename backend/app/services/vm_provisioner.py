@@ -78,15 +78,24 @@ class VmProvisioner:
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists():
             raise ProvisioningError(f"디스크 파일이 이미 존재합니다: {dst}")
-        self._qemu(["convert", "-p", "-O", "qcow2", str(src), str(dst)])
-        self._qemu(["resize", str(dst), f"{size_gb}G"])
+        try:
+            self._qemu(["convert", "-p", "-O", "qcow2", str(src), str(dst)])
+            self._qemu(["resize", str(dst), f"{size_gb}G"])
+        except Exception:
+            # A failed qemu-img convert/resize may leave an incomplete image.
+            dst.unlink(missing_ok=True)
+            raise
 
     def create_empty_disk(self, destination: str, size_gb: int) -> None:
         dst = Path(destination)
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists():
             raise ProvisioningError(f"디스크 파일이 이미 존재합니다: {dst}")
-        self._qemu(["create", "-f", "qcow2", str(dst), f"{size_gb}G"])
+        try:
+            self._qemu(["create", "-f", "qcow2", str(dst), f"{size_gb}G"])
+        except Exception:
+            dst.unlink(missing_ok=True)
+            raise
 
     def customize(self, destination: str, name: str) -> None:
         result = subprocess.run([self.customize_script, destination, name], capture_output=True, text=True,
@@ -111,7 +120,8 @@ class VmProvisioner:
             # Store only a salted SHA-512 hash inside the cloud-init ISO.
             password_hash = sha512_crypt.hash(guest_password)
             user_config = {
-                "preserve_hostname": False, "hostname": name, "manage_etc_hosts": True,
+                # Cloud-init must not replace the guest's preexisting /etc/hosts.
+                "preserve_hostname": False, "hostname": name, "manage_etc_hosts": False,
                 "ssh_pwauth": True, "disable_root": True,
                 "users": [{"name": guest_username, "gecos": "KVM administrator",
                            "groups": "wheel,sudo", "shell": "/bin/bash", "lock_passwd": False,
@@ -142,6 +152,7 @@ class VmProvisioner:
             network_path.write_text(yaml.safe_dump({"version": 2, "ethernets": ethernets}, sort_keys=False), encoding="utf-8")
             cloud_localds = shutil.which("cloud-localds")
             genisoimage = shutil.which("genisoimage")
+            xorriso = shutil.which("xorriso")
             if cloud_localds:
                 command = [cloud_localds, "--network-config", str(network_path), str(destination_path),
                            str(folder_path / "user-data"), str(folder_path / "meta-data")]
@@ -150,10 +161,15 @@ class VmProvisioner:
                 command = [genisoimage, "-quiet", "-output", str(destination_path), "-volid", "cidata",
                            "-joliet", "-rock", "user-data", "meta-data", "network-config"]
                 cwd = str(folder_path)
+            elif xorriso:
+                command = [xorriso, "-as", "mkisofs", "-quiet", "-output", str(destination_path),
+                           "-volid", "cidata", "-joliet", "-rock", "user-data", "meta-data", "network-config"]
+                cwd = str(folder_path)
             else:
-                raise ProvisioningError("cloud-init seed 생성에 cloud-localds 또는 genisoimage가 필요합니다.")
+                raise ProvisioningError("cloud-init seed 생성에 cloud-localds/genisoimage/xorriso 중 하나가 필요합니다.")
             result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=120, check=False)
             if result.returncode:
+                destination_path.unlink(missing_ok=True)
                 raise ProvisioningError(result.stderr.strip() or "cloud-init seed 생성 실패")
 
     def wait_for_guest_network(self, name: str, networks: List[dict], timeout: int = 180) -> None:

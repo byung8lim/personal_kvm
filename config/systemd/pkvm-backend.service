@@ -2,8 +2,8 @@
 Description=Personal KVM FastAPI backend
 Documentation=http://127.0.0.1:8000/docs
 Wants=network-online.target virtqemud.socket virtnetworkd.socket virtstoraged.socket virtproxyd.socket
-After=network-online.target virtqemud.socket virtnetworkd.socket virtstoraged.socket virtproxyd.socket mysqld.service
-Requires=mysqld.service
+After=network-online.target virtqemud.socket virtnetworkd.socket virtstoraged.socket virtproxyd.socket mariadb.service
+Requires=mariadb.service
 
 [Service]
 Type=simple
@@ -13,6 +13,10 @@ SupplementaryGroups=kvm libvirt
 WorkingDirectory=/opt/personal-kvm/backend
 EnvironmentFile=/etc/personal-kvm/.env
 Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/var/lib/personal-kvm
+Environment=TMPDIR=/var/lib/personal-kvm/tmp
+Environment=LIBGUESTFS_CACHEDIR=/var/lib/personal-kvm/cache/libguestfs
+Environment=LIBGUESTFS_TMPDIR=/var/lib/personal-kvm/tmp
 ExecStartPre=+/opt/personal-kvm/scripts/ensure_networks.sh
 ExecStart=/opt/personal-kvm/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
@@ -24,7 +28,9 @@ KillSignal=SIGINT
 # The backend must manage libvirt, VM disk images, and network definitions.
 # These filesystem protections keep the remaining host filesystem read-only.
 ProtectSystem=strict
-ReadWritePaths=/data /data2 /etc/personal-kvm /var/lib/personal-kvm -/run/libvirt -/var/run/libvirt
+ReadWritePaths=-/data -/data2 /etc/personal-kvm /var/lib/personal-kvm /tmp /var/tmp -/run/libvirt -/var/run/libvirt
+# Give libguestfs and supermin a writable isolated /tmp even under ProtectSystem=strict.
+# Keep explicit state directories for cache and temporary appliances.
 PrivateTmp=true
 NoNewPrivileges=true
 ProtectHome=true

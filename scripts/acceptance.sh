@@ -28,8 +28,12 @@ preflight)
     ;;
 postinstall|postreboot)
     require_isolated
-    record systemctl is-active pkvm-backend nginx mysqld \
-        virtqemud.socket virtnetworkd.socket virtstoraged.socket virtproxyd.socket
+    statefile=/var/lib/personal-kvm/install-state/os-runtime.env
+    [ -r "$statefile" ] || { echo "Missing $statefile" >&2; exit 1; }
+    # Installer-generated values, not arbitrary shell input: read exact expected keys only.
+    db_unit="$(sed -n 's/^PKVM_DB_UNIT=//p' "$statefile" | tr -d "'\"")"
+    libvirt_unit="$(sed -n 's/^PKVM_LIBVIRT_UNIT=//p' "$statefile" | tr -d "'\"")"
+    record systemctl is-active pkvm-backend nginx "$db_unit" "$libvirt_unit"
     record systemctl show pkvm-backend -p User -p Group -p NoNewPrivileges \
         -p ProtectSystem -p ProtectKernelModules
     record ss -lntp
@@ -39,8 +43,15 @@ postinstall|postreboot)
     record sudo -u pkvm virsh -c qemu:///system uri
     pid="$(systemctl show pkvm-backend -p MainPID --value)"
     record nsenter -t "${pid}" -m runuser -u pkvm -- \
-        env HOME=/var/lib/personal-kvm LIBGUESTFS_BACKEND=direct libguestfs-test-tool
-    record test -s /data/images/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2
+        env HOME=/var/lib/personal-kvm TMPDIR=/var/lib/personal-kvm/tmp \
+            LIBGUESTFS_TMPDIR=/var/lib/personal-kvm/tmp \
+            LIBGUESTFS_CACHEDIR=/var/lib/personal-kvm/cache/libguestfs \
+            LIBGUESTFS_BACKEND=direct libguestfs-test-tool
+    # Validate actual backend mount namespace writable paths before VM creation.
+    record nsenter -t "${pid}" -m runuser -u pkvm -- \
+        bash -c 'set -e; for base in /tmp /var/tmp /var/lib/personal-kvm/tmp /var/lib/personal-kvm/cache/libguestfs; do d="$(mktemp -d "${base%/}/pkvm-acceptance-XXXXXXXX")"; rmdir "$d"; done'
+    # Images are optional if PKVM_DOWNLOAD_DEFAULT_IMAGE=0.
+    record find /data/images -maxdepth 1 -name '*.qcow2' -type f -print
     record /opt/personal-kvm/backend/venv/bin/alembic \
         -c /opt/personal-kvm/backend/alembic.ini current
     PKVM_RUN_LIVE_INTEGRATION=1 PYTHONPATH=/opt/personal-kvm/backend \
@@ -50,7 +61,8 @@ postinstall|postreboot)
 preuninstall)
     require_isolated
     record virsh -c qemu:///system list --all
-    record mysql -u root -e \
+    db_client="$(command -v mariadb || command -v mysql)"
+    record "$db_client" -u root -e \
         "SELECT id,name,state,last_desired_state FROM personal_kvm.instances"
     ;;
 postuninstall)

@@ -1,3 +1,7 @@
+# Rocky Linux 9.x / 10.x: use binary wheels for the selected system Python.
+# Python 3.12.13 was observed on Rocky 10.2; Rocky 9 wheel availability must be verified on target.
+# No source-build fallback (no compiler required for Python dependencies).
+--only-binary=:all:
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 sqlalchemy==2.0.31

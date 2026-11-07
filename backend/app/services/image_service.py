@@ -21,6 +21,9 @@ def download_image(image_id: int) -> None:
         destination = Path(image.file_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_suffix(destination.suffix + ".part")
+        # A recorded digest is a pin for subsequent downloads. Do not silently
+        # replace it with a checksum calculated from unverified new bytes.
+        expected_sha256 = image.checksum_sha256
         image.status = "DOWNLOADING"
         db.commit()
         digest = hashlib.sha256()
@@ -34,9 +37,14 @@ def download_image(image_id: int) -> None:
                     output.write(chunk)
                     digest.update(chunk)
                     size += len(chunk)
+        actual_sha256 = digest.hexdigest()
+        if expected_sha256 and actual_sha256.lower() != expected_sha256.lower():
+            raise ValueError(
+                f"Image SHA-256 mismatch: expected {expected_sha256}, got {actual_sha256}"
+            )
         temporary.replace(destination)
         image.size_mb = max(1, round(size / (1024 * 1024)))
-        image.checksum_sha256 = digest.hexdigest()
+        image.checksum_sha256 = actual_sha256
         image.status = "READY"
         db.commit()
     except Exception as exc:

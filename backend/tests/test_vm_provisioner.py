@@ -52,9 +52,27 @@ class VmProvisionerTests(unittest.TestCase):
             self.assertIn("network-config", command)
             self.assertIsNotNone(run.call_args.kwargs["cwd"])
             self.assertIn("resize_rootfs: true", captured["user_data"])
+            self.assertIn("manage_etc_hosts: false", captured["user_data"])
             self.assertIn("ssh-rsa AAAAB3", captured["user_data"])
             self.assertIn("to: 0.0.0.0/0", captured["network_config"])
             self.assertNotIn("to: default", captured["network_config"])
+
+    def test_cloud_init_seed_uses_xorriso_when_other_iso_tools_missing(self):
+        completed = type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        with tempfile.TemporaryDirectory() as folder, \
+             patch("app.services.vm_provisioner.shutil.which", side_effect=lambda name: "/usr/bin/xorriso" if name == "xorriso" else None), \
+             patch("app.services.vm_provisioner.subprocess.run", return_value=completed) as run:
+            key_path = Path(folder) / "id_rsa.pub"
+            key_path.write_text("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDiagnostic test@pkvm\n")
+            VmProvisioner(FakeLibvirt(), emulator_path="/usr/bin/qemu-system-x86_64",
+                          ssh_public_key_path=str(key_path)).create_cloud_init_seed(
+                str(Path(folder) / "seed.iso"), "vm-seed",
+                [{"mac": "52:54:00:00:00:01", "address": "10.0.0.2/24"}],
+                "kvmadmin", "StrongPass123!"
+            )
+            args = run.call_args.args[0]
+            self.assertEqual(args[:3], ["/usr/bin/xorriso", "-as", "mkisofs"])
+            self.assertIn("network-config", args)
 
     def test_emulator_is_discovered_from_libvirt_capabilities(self):
         completed = type("Completed", (), {"returncode": 0, "stdout": "<domainCapabilities><path>/opt/qemu/bin/qemu-system-x86_64</path></domainCapabilities>"})()
@@ -95,6 +113,32 @@ class VmProvisionerTests(unittest.TestCase):
             self.assertFalse(Path(extra).exists())
             self.assertIn(("undefine", "vm-01"), libvirt.calls)
 
+    def test_failed_root_conversion_removes_partial_disk(self):
+        service = VmProvisioner(FakeLibvirt())
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.qcow2"
+            dest = Path(folder) / "root.qcow2"
+            source.write_bytes(b"source")
+            def fail_after_partial_write(args):
+                dest.write_bytes(b"incomplete")
+                raise ProvisioningError("convert failed")
+            with patch.object(service, "_qemu", side_effect=fail_after_partial_write):
+                with self.assertRaises(ProvisioningError):
+                    service.create_root_disk(str(source), str(dest), 20)
+            self.assertFalse(dest.exists())
+
+    def test_failed_extra_disk_creation_removes_partial_disk(self):
+        service = VmProvisioner(FakeLibvirt())
+        with tempfile.TemporaryDirectory() as folder:
+            dest = Path(folder) / "extra.qcow2"
+            def fail_after_partial_write(args):
+                dest.write_bytes(b"incomplete")
+                raise ProvisioningError("create failed")
+            with patch.object(service, "_qemu", side_effect=fail_after_partial_write):
+                with self.assertRaises(ProvisioningError):
+                    service.create_empty_disk(str(dest), 10)
+            self.assertFalse(dest.exists())
+
     def test_cleanup_compensates_domain_and_all_files(self):
         libvirt = FakeLibvirt(final_state="RUNNING")
         service = VmProvisioner(libvirt)
@@ -114,13 +158,13 @@ class VmProvisionerTests(unittest.TestCase):
         with patch("app.services.vm_provisioner.shutil.which", return_value="/usr/bin/ping"), \
              patch("app.services.vm_provisioner.time.monotonic", side_effect=[0, 1, 2]), \
              patch("app.services.vm_provisioner.time.sleep"), \
-             patch("app.services.vm_provisioner.subprocess.run", side_effect=[failed, replied]) as run:
+             patch("app.services.vm_provisioner.subprocess.run", side_effect=[failed, replied, replied, replied]) as run:
             service.wait_for_guest_network(
                 "vm-01",
                 [{"address": "10.10.50.2/24"}, {"address": "10.10.60.2/24"}],
                 timeout=10,
             )
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_count, 4)
 
 
 if __name__ == "__main__": unittest.main()
