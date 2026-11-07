@@ -1,4 +1,5 @@
 from sqlalchemy import Column, BigInteger, String, Integer, Numeric, DateTime, Text, ForeignKey
+from sqlalchemy.dialects.mysql import BIGINT as MySQLBigInteger
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
@@ -147,6 +148,12 @@ class ManagedNfsMount(Base):
     __tablename__ = "managed_nfs_mounts"
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     volume_id = Column(BigInteger, ForeignKey("managed_nfs_volumes.id"), nullable=False)
-    instance_id = Column(BigInteger, ForeignKey("instances.id"), nullable=False)
+    # schema.sql creates instances.id as BIGINT UNSIGNED on MySQL. Foreign-key
+    # columns must match signedness exactly or MySQL rejects the constraint.
+    instance_id = Column(
+        BigInteger().with_variant(MySQLBigInteger(unsigned=True), "mysql"),
+        ForeignKey("instances.id"),
+        nullable=False,
+    )
     target_path = Column(String(250), nullable=False)
     status = Column(String(20), nullable=False, default="PLANNED")

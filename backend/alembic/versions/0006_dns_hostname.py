@@ -9,10 +9,16 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column("instances", sa.Column("dns_hostname", sa.String(64), nullable=True))
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = {column["name"] for column in inspector.get_columns("instances")}
+    if "dns_hostname" not in columns:
+        op.add_column("instances", sa.Column("dns_hostname", sa.String(64), nullable=True))
     op.execute("UPDATE instances SET dns_hostname = name WHERE dns_hostname IS NULL")
     op.alter_column("instances", "dns_hostname", existing_type=sa.String(64), nullable=False)
-    op.create_index("ix_instances_dns_hostname", "instances", ["dns_hostname"], unique=False)
+    indexes = {index["name"] for index in sa.inspect(bind).get_indexes("instances")}
+    if "ix_instances_dns_hostname" not in indexes:
+        op.create_index("ix_instances_dns_hostname", "instances", ["dns_hostname"], unique=False)
 
 
 def downgrade():
