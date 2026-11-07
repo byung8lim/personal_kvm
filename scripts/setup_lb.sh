@@ -20,8 +20,10 @@ Wants=network-online.target
 ConditionPathExists=/etc/haproxy/pkvm-managed.cfg
 [Service]
 Type=notify
+RuntimeDirectory=pkvm-haproxy
+RuntimeDirectoryMode=0750
 ExecStart=/usr/sbin/haproxy -Ws -f /etc/haproxy/pkvm-managed.cfg -p /run/pkvm-haproxy.pid
-ExecReload=/bin/kill -USR2 $MAINPID
+ExecReload=/bin/kill -USR2 \$MAINPID
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -31,7 +33,24 @@ ProtectHome=true
 WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
+  cat >/etc/systemd/system/pkvm-ha-monitor.service <<UNIT
+[Unit]
+Description=Personal KVM HAProxy backend failover monitor
+After=pkvm-haproxy.service
+Requires=pkvm-haproxy.service
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/personal-kvm/scripts/ha_manager.py --monitor
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectHome=true
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
   systemctl enable pkvm-haproxy.service
+  systemctl enable pkvm-ha-monitor.service
   ;;
 traefik)
   TRAEFIK_BIN="$(command -v traefik || true)"

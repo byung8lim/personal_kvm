@@ -61,6 +61,9 @@ def install(specs, destination=CONFIG):
     if not shutil.which("haproxy"):
         raise RuntimeError("HAProxy binary missing")
     content=generate(specs)
+    # HAProxy runtime API stays local to the privileged control service.
+    content=content.replace("    maxconn 20000\\n",
+        "    maxconn 20000\\n    stats socket /run/pkvm-haproxy/admin.sock mode 600 level admin\\n")
     destination.parent.mkdir(parents=True,exist_ok=True)
     old=destination.read_bytes() if destination.exists() else None
     fd,temp=tempfile.mkstemp(prefix=".pkvm-haproxy-",dir=str(destination.parent))
@@ -90,6 +93,17 @@ def install(specs, destination=CONFIG):
     finally:
         if os.path.exists(temp):
             os.unlink(temp)
+    state_file=Path("/etc/personal-kvm/ha-services.json")
+    state_file.parent.mkdir(mode=0o750,parents=True,exist_ok=True)
+    state_file.write_text(json.dumps([s for s in specs if len(s.get("backends",[]))==2 and
+                           bool(s["backends"][1].get("standby",False))],ensure_ascii=False),
+                           encoding="utf-8")
+    state_file.chmod(0o600)
+    try:
+        run(["systemctl","start","pkvm-ha-monitor.service"])
+    except RuntimeError:
+        # Routing remains active, but the monitor must be diagnosed.
+        raise
     return destination
 
 def main():
