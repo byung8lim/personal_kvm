@@ -8,6 +8,16 @@ service:
   overcommit_cpu_ratio: 2.0
   reserved_host_memory_gb: 4
 
+# Explicitly enable only after named zones, ACLs and TSIG key are configured.
+# Never commit a TSIG secret; key_file references a local protected key file.
+dns:
+  enabled: false
+  server: null
+  key_file: null
+  forward_zone: null
+  reverse_zone: null
+  ttl: 300
+
 storage:
   image_dir: "/data/images"
   root_disk_dir: "/data/instances"

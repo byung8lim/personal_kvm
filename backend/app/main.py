@@ -18,10 +18,24 @@ from app.services.libvirt_service import LibvirtError, libvirt_service
 from app.services.vm_provisioner import ProvisioningError, VmProvisioner, resolve_qemu_emulator
 from app.services.storage_service import synchronize_storage_pools
 from app.services.image_worker import image_worker
+from app.services.bind9_ddns import Bind9Ddns, DdnsError
 from app.schemas.requests import LoginReq, ChangePasswordReq, CreateInstanceReq, CreateDiskReq, ResizeInstanceReq, DiskActionReq
 from app.core.runtime_config import runtime_config, storage_path
 
 vm_provisioner = VmProvisioner(libvirt_service)
+
+
+def configured_ddns():
+    """Return the optional TSIG updater; no DDNS calls when disabled."""
+    dns = runtime_config().get("dns") or {}
+    if not dns.get("enabled", False):
+        return None
+    required = ("server", "key_file", "forward_zone", "reverse_zone")
+    missing = [key for key in required if not dns.get(key)]
+    if missing:
+        raise DdnsError("Bind9 DNS 필수 설정 누락: " + ", ".join(missing))
+    return Bind9Ddns(dns["server"], dns["key_file"], dns["forward_zone"],
+                     dns["reverse_zone"], ttl=int(dns.get("ttl", 300)))
 
 app = FastAPI(title="퍼스널 KVM 가상화 서비스 API", version="0.0.8")
 
@@ -300,7 +314,7 @@ def list_instances(db: Session = Depends(get_db), _admin: str = Depends(require_
 
 # VM creation does not hold the HTTP request open. The committed DB row is
 # the authoritative job record; workers use their own SQLAlchemy sessions.
-_CREATE_PHASES = {"QUEUED": "생성 대기", "ROOT_DISK": "루트 디스크 생성", "OS_CUSTOMIZE": "OS 초기화", "EXTRA_DISK": "추가 디스크 생성", "CLOUD_INIT": "계정 및 네트워크 구성", "DEFINE": "VM 등록", "BOOT": "VM 부팅", "NETWORK": "네트워크 확인", "FINALIZE": "결과 저장"}
+_CREATE_PHASES = {"QUEUED": "생성 대기", "ROOT_DISK": "루트 디스크 생성", "OS_CUSTOMIZE": "OS 초기화", "EXTRA_DISK": "추가 디스크 생성", "CLOUD_INIT": "계정 및 네트워크 구성", "DEFINE": "VM 등록", "BOOT": "VM 부팅", "NETWORK": "네트워크 확인", "DNS": "내부 DNS 등록", "FINALIZE": "결과 저장"}
 
 def _create_worker(instance_id, operation_uuid, instance_name, image_path, root_path, root_gb,
                    extra_path, extra_gb, memory_gb, vcores, bridges, macs, network_configs,
@@ -308,6 +322,7 @@ def _create_worker(instance_id, operation_uuid, instance_name, image_path, root_
     # Never share a request-scoped Session across threads.
     session = SessionLocal()
     provisioned = False
+    dns_registered = False
     paths = [x for x in (root_path, extra_path, seed_path) if x]
     def progress(phase, description):
         try:
@@ -324,6 +339,12 @@ def _create_worker(instance_id, operation_uuid, instance_name, image_path, root_
                                  seed_path, guest_username, guest_password, progress=progress,
                                  guest_hostname=dns_hostname)
         provisioned = True
+        instance = session.query(Instance).filter(Instance.id == instance_id).one()
+        updater = configured_ddns()
+        if updater and instance.private_ip:
+            progress("DNS", "내부 A/PTR 등록 중")
+            updater.add(instance.dns_hostname, instance.private_ip)
+            dns_registered = True
         progress("FINALIZE", "생성 결과 기록 중")
         instance = session.query(Instance).filter(Instance.id == instance_id).with_for_update().one()
         op = session.query(ResourceOperation).filter(ResourceOperation.operation_uuid == operation_uuid).with_for_update().one()
@@ -334,6 +355,11 @@ def _create_worker(instance_id, operation_uuid, instance_name, image_path, root_
     except Exception as exc:
         session.rollback()
         logging.exception("VM %s creation failed", instance_name)
+        if dns_registered:
+            try:
+                configured_ddns().remove(dns_hostname, instance.private_ip)
+            except Exception:
+                logging.exception("VM %s DNS compensation failed", instance_name)
         # Provisioner compensates its own failures; cleanup again is idempotent
         # and covers failures while recording final DB state.
         try:
@@ -582,6 +608,9 @@ def instance_action(instance_id: int, action: str, force: bool = False, db: Sess
             inst.state = "DELETING"
             db.commit()
             inst = db.query(Instance).filter(Instance.id == instance_id).with_for_update().one()
+            updater = configured_ddns()
+            if updater and inst.private_ip:
+                updater.remove(inst.dns_hostname, inst.private_ip)
             op = db.query(ResourceOperation).filter(
                 ResourceOperation.operation_uuid == operation_uuid
             ).with_for_update().one()
