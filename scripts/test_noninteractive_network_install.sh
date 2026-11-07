@@ -10,5 +10,7 @@ grep -Fq 'PKVM_ALLOW_NONINTERACTIVE_NETWORK:-0' "${NETWORK_SETUP}"
 grep -Fq "printf 'Yes\\n'" "${NETWORK_SETUP}"
 grep -Fq 'CHECKPOINT_COMMAND=' "${NETWORK_SETUP}"
 grep -Fq 'checkpoint_failed=1' "${NETWORK_SETUP}"
+grep -Fq 'virsh net-list --name' "${NETWORK_SETUP}"
+grep -Fq 'END { exit !found }' "${NETWORK_SETUP}"
 
 printf '[PASS] Non-interactive network installer regression checks\n'

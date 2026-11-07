@@ -179,7 +179,10 @@ setup_libvirt_net() {
         actual="$(virsh net-info "$net_name" | awk '/Bridge:/ {print $2}')"
         [[ "$actual" == "$bridge" ]] || die "$net_name: 기존 브리지 $actual 와 요청 $bridge 가 다릅니다. 삭제하지 않습니다."
         log "$net_name($bridge): 기존 정의 유지"
-        if ! virsh net-info "$net_name" | grep -Eq '^Active:[[:space:]]+yes'; then
+        # Do not parse localized net-info labels. Read the full active-name
+        # list so pipefail cannot turn an early grep exit into a false result.
+        if ! virsh net-list --name | awk -v name="$net_name" \
+            '$0 == name { found=1 } END { exit !found }'; then
             virsh net-start "$net_name"
         fi
     else
