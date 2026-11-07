@@ -19,6 +19,7 @@ from app.services.vm_provisioner import ProvisioningError, VmProvisioner, resolv
 from app.services.storage_service import synchronize_storage_pools
 from app.services.image_worker import image_worker
 from app.services.bind9_ddns import Bind9Ddns, DdnsError
+from app.services.dns_inspector import dns_status
 from app.schemas.requests import LoginReq, ChangePasswordReq, CreateInstanceReq, CreateDiskReq, ResizeInstanceReq, DiskActionReq
 from app.core.runtime_config import runtime_config, storage_path
 
@@ -209,6 +210,11 @@ def readiness():
     ready = all(value == "ok" or key == "qemu_path" for key, value in checks.items())
     payload = {"status": "ready" if ready else "not_ready", "version": "0.0.6", "checks": checks}
     return payload if ready else JSONResponse(status_code=503, content=payload)
+
+@app.get("/api/v1/dns/status")
+def get_dns_status(_admin: str = Depends(require_active_admin)):
+    """Read-only SOA status for configured DNS zones; never exposes key material."""
+    return dns_status(runtime_config().get("dns") or {})
 
 @app.get("/api/v1/system/libvirt")
 def get_libvirt_status(_admin: str = Depends(require_active_admin)):
