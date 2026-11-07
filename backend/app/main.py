@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import text
+from sqlalchemy import text, func
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import SessionLocal, get_db
@@ -422,9 +422,19 @@ def create_instance(req: CreateInstanceReq, db: Session = Depends(get_db), _admi
     int_net = db.query(VirtualNetwork).filter(VirtualNetwork.net_type == "INTERNAL").first() if req.internal_network else None
     mgmt_net = db.query(VirtualNetwork).filter(VirtualNetwork.net_type == "MANAGEMENT").first() if req.management_network else None
 
+    ip_strategy = runtime_config().get("service", {}).get("ip_allocation_strategy", "RANDOM")
+    if ip_strategy not in ("RANDOM", "SERIAL"):
+        db.rollback()
+        raise HTTPException(status_code=422, detail="service.ip_allocation_strategy는 RANDOM 또는 SERIAL이어야 합니다.")
+
     def alloc_ip(net):
         if not net: return None
-        ip_row = db.query(IpPool).filter(IpPool.network_id == net.id, IpPool.status == "AVAILABLE").with_for_update(skip_locked=True).first()
+        candidates = db.query(IpPool).filter(IpPool.network_id == net.id, IpPool.status == "AVAILABLE")
+        if ip_strategy == "RANDOM":
+            candidates = candidates.order_by(func.rand())
+        else:
+            candidates = candidates.order_by(func.inet_aton(IpPool.ip_address))
+        ip_row = candidates.with_for_update(skip_locked=True).first()
         if ip_row:
             ip_row.status = "ASSIGNED"
             ip_row.assigned_at = datetime.utcnow()
