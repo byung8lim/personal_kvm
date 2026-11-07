@@ -1,4 +1,4 @@
-import os, uuid, psutil, hashlib, threading, logging, time
+import os, uuid, psutil, hashlib, threading, logging, time, json
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request, Body
@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal, get_db
 from app.core.init_db import init_seed_data
 from app.core.security import verify_password, create_access_token, get_password_hash, require_admin, require_active_admin
-from app.models.entities import AdminUser, OsImage, StoragePool, VirtualNetwork, IpPool, Instance, InstanceNic, VirtualDisk, ResourceOperation, ResourceLock
+from app.models.entities import AdminUser, OsImage, StoragePool, VirtualNetwork, IpPool, Instance, InstanceNic, VirtualDisk, ResourceOperation, ResourceLock, ManagedLbService, ManagedNfsVolume, ManagedNfsMount
 from app.services.instance_state import InvalidStateTransition, ensure_transition
 from app.services.libvirt_service import LibvirtError, libvirt_service
 from app.services.vm_provisioner import ProvisioningError, VmProvisioner, resolve_qemu_emulator
@@ -21,6 +21,8 @@ from app.services.image_worker import image_worker
 from app.services.bind9_ddns import Bind9Ddns, DdnsError
 from app.services.dns_inspector import dns_status
 from app.services.haproxy_l4 import render_tcp_service
+from app.services.traefik_l7 import render_yaml as render_l7_yaml
+from app.services.nfs_volumes import create_volume, delete_volume, VolumeError
 from app.schemas.requests import LoginReq, ChangePasswordReq, CreateInstanceReq, CreateDiskReq, ResizeInstanceReq, DiskActionReq
 from app.core.runtime_config import runtime_config, storage_path
 
@@ -211,6 +213,91 @@ def readiness():
     ready = all(value == "ok" or key == "qemu_path" for key, value in checks.items())
     payload = {"status": "ready" if ready else "not_ready", "version": "0.0.6", "checks": checks}
     return payload if ready else JSONResponse(status_code=503, content=payload)
+
+@app.get("/api/v1/lb/services")
+def list_lb_services(db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+    return [{"id":v.id, "name":v.name, "layer":v.layer, "status":v.status,
+             "specification":json.loads(v.specification), "error_message":v.error_message}
+            for v in db.query(ManagedLbService).order_by(ManagedLbService.id.desc()).all()]
+
+@app.post("/api/v1/lb/services", status_code=201)
+def create_lb_service(spec: dict = Body(...), db: Session = Depends(get_db),
+                      _admin: str = Depends(require_active_admin)):
+    layer=spec.get("layer")
+    try:
+        if layer=="L4": rendered=render_tcp_service(spec)
+        elif layer=="L7": rendered=render_l7_yaml(spec)
+        else: raise ValueError("layer must be L4 or L7")
+    except (TypeError,ValueError,KeyError) as exc:
+        raise HTTPException(status_code=422,detail=str(exc))
+    if db.query(ManagedLbService).filter(ManagedLbService.name==spec["name"]).first():
+        raise HTTPException(status_code=409,detail="Load balancer name already exists")
+    record=ManagedLbService(name=spec["name"],layer=layer,
+                            specification=json.dumps(spec,ensure_ascii=False),status="DRAFT")
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return {"id":record.id,"name":record.name,"status":record.status,"preview":rendered}
+
+@app.delete("/api/v1/lb/services/{service_id}")
+def delete_lb_service(service_id: int, db: Session = Depends(get_db),
+                      _admin: str = Depends(require_active_admin)):
+    record=db.query(ManagedLbService).filter(ManagedLbService.id==service_id).with_for_update().first()
+    if not record: raise HTTPException(status_code=404,detail="Load balancer not found")
+    if record.status not in ("DRAFT","ERROR"):
+        raise HTTPException(status_code=409,detail="Disable routing before deleting an active LB")
+    db.delete(record)
+    db.commit()
+    return {"status":"deleted"}
+
+@app.get("/api/v1/nfs/volumes")
+def get_nfs_volumes(db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+    return [{"id":v.id,"name":v.name,"path":v.file_path,"status":v.status,
+             "mount_count":db.query(ManagedNfsMount).filter(ManagedNfsMount.volume_id==v.id).count()}
+            for v in db.query(ManagedNfsVolume).order_by(ManagedNfsVolume.id).all()]
+
+@app.post("/api/v1/nfs/volumes", status_code=201)
+def add_nfs_volume(payload: dict = Body(...), db: Session = Depends(get_db),
+                   _admin: str = Depends(require_active_admin)):
+    name=payload.get("name")
+    spec=runtime_config().get("nfs",{})
+    root=spec.get("NFS_DIR")
+    if not root: raise HTTPException(status_code=503,detail="NFS_DIR is not configured")
+    if db.query(ManagedNfsVolume).filter(ManagedNfsVolume.name==name).first():
+        raise HTTPException(status_code=409,detail="Volume already registered")
+    try:
+        path=create_volume(root,name)
+    except (VolumeError,OSError,TypeError) as exc:
+        raise HTTPException(status_code=422,detail=str(exc))
+    v=ManagedNfsVolume(name=name,file_path=path,status="READY")
+    try:
+        db.add(v)
+        db.commit()
+        db.refresh(v)
+    except Exception:
+        db.rollback()
+        # Never silently destroy files on DB failure.
+        raise
+    return {"id":v.id,"name":v.name,"path":path}
+
+@app.delete("/api/v1/nfs/volumes/{volume_id}")
+def remove_nfs_volume(volume_id:int,db: Session = Depends(get_db),
+                      _admin: str = Depends(require_active_admin)):
+    volume=db.query(ManagedNfsVolume).filter(ManagedNfsVolume.id==volume_id).with_for_update().first()
+    if not volume: raise HTTPException(status_code=404,detail="Volume not found")
+    users=db.query(ManagedNfsMount).filter(ManagedNfsMount.volume_id==volume.id).count()
+    try: delete_volume(runtime_config().get("nfs",{}).get("NFS_DIR"),volume.name,users)
+    except (VolumeError,OSError,TypeError) as exc:
+        raise HTTPException(status_code=409,detail=str(exc))
+    db.delete(volume)
+    db.commit()
+    return {"status":"deleted"}
+
+@app.post("/api/v1/l7/preview")
+def preview_l7_configuration(spec: dict = Body(...),_admin: str = Depends(require_active_admin)):
+    try: return {"status":"preview_only","configuration":render_l7_yaml(spec)}
+    except (ValueError,TypeError,KeyError) as exc:
+        raise HTTPException(status_code=422,detail=str(exc))
 
 @app.post("/api/v1/l4/preview")
 def preview_l4_configuration(spec: dict = Body(...), _admin: str = Depends(require_active_admin)):

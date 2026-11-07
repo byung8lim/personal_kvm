@@ -124,3 +124,29 @@ class ResourceLock(Base):
     __tablename__ = "resource_locks"
     id = Column(Integer, primary_key=True)
     name = Column(String(50), unique=True, nullable=False)
+
+class ManagedLbService(Base):
+    __tablename__ = "managed_lb_services"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    name = Column(String(40), unique=True, nullable=False)
+    layer = Column(String(2), nullable=False)
+    specification = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default="DRAFT")
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class ManagedNfsVolume(Base):
+    __tablename__ = "managed_nfs_volumes"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    name = Column(String(63), unique=True, nullable=False)
+    file_path = Column(String(500), nullable=False)
+    status = Column(String(20), nullable=False, default="READY")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class ManagedNfsMount(Base):
+    __tablename__ = "managed_nfs_mounts"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    volume_id = Column(BigInteger, ForeignKey("managed_nfs_volumes.id"), nullable=False)
+    instance_id = Column(BigInteger, ForeignKey("instances.id"), nullable=False)
+    target_path = Column(String(250), nullable=False)
+    status = Column(String(20), nullable=False, default="PLANNED")
