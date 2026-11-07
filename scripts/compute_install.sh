@@ -51,5 +51,10 @@ fi
 if [[ "${PKVM_SETUP_TRAEFIK:-0}" == 1 ]]; then
   bash "${ROOT}/scripts/setup_lb.sh" traefik "$PKVM_TRAEFIK_PORT"
 fi
+if [[ "${PKVM_SETUP_HAPROXY:-0}" == 1 || "${PKVM_SETUP_TRAEFIK:-0}" == 1 ]]; then
+  install -D -m 0644 /etc/personal-kvm/systemd/pkvm-lb-agent.service /etc/systemd/system/pkvm-lb-agent.service
+  systemctl daemon-reload
+  systemctl enable --now pkvm-lb-agent.service
+fi
 systemctl restart pkvm-backend.service
 echo '[완료] compute.yaml 기반 설치 및 선택 서비스 설정이 끝났습니다.'
