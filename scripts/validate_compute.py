@@ -72,7 +72,17 @@ def validate(data):
             port = cfg_service.get("listen_port")
             if type(port) is not int or not 1 <= port <= 65535:
                 raise ValueError(f"{key}.listen_port must be 1..65535")
-    if service["traefik"] and service["haproxy"] and cfg["traefik"]["listen_port"] == cfg["haproxy"]["listen_port"]:
+    reserved = {22, 53, 80, 443, 8000, 8080, 3306}
+    for key in ("traefik", "haproxy"):
+        if service[key] and cfg[key]["listen_port"] in reserved:
+            raise ValueError(f"{key}.listen_port conflicts with a reserved system service")
+    if service["traefik"]:
+        p = cfg["traefik"]["listen_port"]
+        if p >= 65535 or p+1 in reserved:
+            raise ValueError("traefik requires an available adjacent HTTP port")
+    if service["traefik"] and service["haproxy"] and cfg["haproxy"]["listen_port"] in (
+        cfg["traefik"]["listen_port"], cfg["traefik"]["listen_port"]+1
+    ):
         raise ValueError("traefik/haproxy listener ports conflict")
     values = {"PKVM_SETUP_BIND9": int(service["bind9"])}
     if service["bind9"]:

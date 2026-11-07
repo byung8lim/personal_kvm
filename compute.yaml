@@ -18,6 +18,7 @@ bind9:
 nfs:
   NFS_DIR: /srv/pkvm-shared
 traefik:
-  listen_port: 443
+  # Host nginx already owns 443. This port and the adjacent HTTP port must be free.
+  listen_port: 8444
 haproxy:
   listen_port: 8443
