@@ -289,7 +289,7 @@ def list_instances(db: Session = Depends(get_db), _admin: str = Depends(require_
         {
             "id": i.id, "instance_uuid": i.instance_uuid, "name": i.name,
             "os_name": images.get(i.os_image_id, "Rocky 9.8"),
-            "vcores": i.vcores, "memory_gb": i.memory_gb,
+            "dns_hostname": i.dns_hostname, "vcores": i.vcores, "memory_gb": i.memory_gb,
             "root_disk_gb": i.root_disk_gb, "extra_disk_gb": i.extra_disk_gb,
             "public_ip": i.public_ip, "private_ip": i.private_ip, "mgmt_ip": i.mgmt_ip,
             "state": i.state, "error_message": i.error_message,
@@ -304,7 +304,7 @@ _CREATE_PHASES = {"QUEUED": "생성 대기", "ROOT_DISK": "루트 디스크 생�
 
 def _create_worker(instance_id, operation_uuid, instance_name, image_path, root_path, root_gb,
                    extra_path, extra_gb, memory_gb, vcores, bridges, macs, network_configs,
-                   seed_path, guest_username, guest_password):
+                   seed_path, guest_username, guest_password, dns_hostname):
     # Never share a request-scoped Session across threads.
     session = SessionLocal()
     provisioned = False
@@ -321,7 +321,8 @@ def _create_worker(instance_id, operation_uuid, instance_name, image_path, root_
         progress("ROOT_DISK", "루트 디스크 생성 중")
         vm_provisioner.provision(instance_name, image_path, root_path, root_gb, extra_path,
                                  extra_gb, memory_gb, vcores, bridges, macs, network_configs,
-                                 seed_path, guest_username, guest_password, progress=progress)
+                                 seed_path, guest_username, guest_password, progress=progress,
+                                 guest_hostname=dns_hostname)
         provisioned = True
         progress("FINALIZE", "생성 결과 기록 중")
         instance = session.query(Instance).filter(Instance.id == instance_id).with_for_update().one()
@@ -374,6 +375,8 @@ def create_instance(req: CreateInstanceReq, db: Session = Depends(get_db), _admi
             raise HTTPException(status_code=409, detail="OS 이미지 체크섬 검증에 실패했습니다.")
     if db.query(Instance).filter(Instance.name == req.name, Instance.state != "DELETED").first():
         raise HTTPException(status_code=400, detail="이미 존재하는 인스턴스 이름입니다.")
+    if db.query(Instance).filter(Instance.dns_hostname == req.effective_hostname, Instance.state != "DELETED").first():
+        raise HTTPException(status_code=409, detail="이미 사용 중인 내부 DNS 호스트명입니다.")
     if libvirt_service.domain_exists(req.name):
         raise HTTPException(status_code=409, detail="동일한 libvirt 도메인 이름이 이미 존재합니다.")
     deleted_same_name = db.query(Instance).filter(Instance.name == req.name, Instance.state == "DELETED").first()
@@ -413,6 +416,7 @@ def create_instance(req: CreateInstanceReq, db: Session = Depends(get_db), _admi
     inst = Instance(
         instance_uuid=str(uuid.uuid4()),
         name=req.name,
+        dns_hostname=req.effective_hostname,
         os_image_id=req.os_image_id,
         vcores=req.vcores,
         memory_gb=req.memory_gb,
@@ -494,7 +498,7 @@ def create_instance(req: CreateInstanceReq, db: Session = Depends(get_db), _admi
     args = (instance_id, operation_uuid, instance_name, image.file_path, root_path,
             req.root_disk_gb, extra_path, req.extra_disk_gb, req.memory_gb, req.vcores,
             [net.bridge_name for net, _, _ in selected], macs, network_configs, seed_path,
-            req.guest_username, req.guest_password)
+            req.guest_username, req.guest_password, req.effective_hostname)
     try:
         threading.Thread(target=_create_worker, args=args, daemon=True,
                          name=f"vm-create-{instance_id}").start()

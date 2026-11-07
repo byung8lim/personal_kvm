@@ -67,6 +67,7 @@ class Instance(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     instance_uuid = Column(String(36), unique=True, nullable=False)
     name = Column(String(64), unique=True, nullable=False)
+    dns_hostname = Column(String(64), nullable=False)
     os_image_id = Column(BigInteger, ForeignKey("os_images.id"), nullable=False)
     vcores = Column(Integer, default=2)
     memory_gb = Column(Integer, default=4)
