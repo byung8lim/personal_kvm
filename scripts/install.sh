@@ -133,6 +133,41 @@ install_verified_dependency() {
     }
 }
 
+node_version_is_supported() {
+    command -v node >/dev/null 2>&1 &&
+        node -e 'const [major,minor]=process.versions.node.split(".").map(Number); process.exit((major===20 && minor>=19)||(major===22 && minor>=12)||(major>22)?0:1)'
+}
+
+ensure_supported_nodejs() {
+    if node_version_is_supported && command -v npm >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [ "${ROCKY_MAJOR}" = "9" ]; then
+        # Rocky 9 defaults to Node.js 16 when no AppStream module is selected,
+        # while the current Vite toolchain requires Node.js 20.19+ or 22.12+.
+        dnf -y module reset nodejs
+        dnf -y module enable nodejs:22
+        dnf -y install --allowerasing nodejs npm
+    else
+        install_verified_package nodejs
+        if ! command -v npm >/dev/null 2>&1; then
+            if installed_or_repo nodejs-npm; then
+                dnf install -y nodejs-npm
+            elif installed_or_repo npm; then
+                dnf install -y npm
+            fi
+        fi
+    fi
+
+    if ! node_version_is_supported || ! command -v npm >/dev/null 2>&1; then
+        local installed_version
+        installed_version="$(node -p 'process.versions.node' 2>/dev/null || echo unavailable)"
+        echo "[오류] 지원되는 Node.js/npm 설치에 실패했습니다. Node.js: ${installed_version}" >&2
+        exit 1
+    fi
+}
+
 # 설치가 실패해도 임의 저장소를 활성화하거나 해당 패키지를 추정 설치하지 않음.
 # Rocky 9에서는 EPEL/CRB 활성화가 필요한 환경이면 운영자가 먼저 설정해야 함.
 core_packages=(qemu-kvm libvirt virt-install cloud-utils-growpart python3-devel)
@@ -196,7 +231,7 @@ if ! "$PYTHON_BIN" -m venv --help >/dev/null 2>&1; then
     exit 1
 fi
 # Node 22은 Rocky 10.2에서 실제 확인됨. Rocky 9는 활성 저장소 기준으로 선택.
-if ! command -v node >/dev/null 2>&1; then install_verified_package nodejs; fi
+ensure_supported_nodejs
 find_qemu_emulator() {
     local candidate
 
@@ -245,7 +280,7 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 command -v npm >/dev/null 2>&1 || { echo '[오류] npm 명령을 찾을 수 없습니다.' >&2; exit 1; }
 NODE_VERSION="$(node -p 'process.versions.node' 2>/dev/null || echo 0.0.0)"
-if ! node -e 'const [major,minor]=process.versions.node.split(".").map(Number); process.exit((major===20 && minor>=19)||(major===22 && minor>=12)||(major>22)?0:1)'; then
+if ! node_version_is_supported; then
     echo "[오류] 프런트엔드 빌드는 Node.js 20.19+ 또는 22.12+가 필요합니다. 현재: ${NODE_VERSION}" >&2
     exit 1
 fi
