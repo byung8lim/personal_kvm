@@ -12,7 +12,9 @@ if network.version!=4 or network.prefixlen<16: sys.exit("Invalid private managem
 if not network.is_private: sys.exit("NFS must not be exported to public networks")
 PY
 rpm -q nfs-utils >/dev/null 2>&1 || dnf install -y nfs-utils
-install -d -o root -g root -m 0750 "$ROOT"
+[[ ! -L "$ROOT" ]] || { echo '[NFS 오류] NFS_DIR 심볼릭 링크는 허용하지 않습니다.' >&2; exit 2; }
+getent passwd pkvm >/dev/null || { echo '[NFS 오류] pkvm 계정이 없습니다.' >&2; exit 2; }
+install -d -o pkvm -g pkvm -m 0770 "$ROOT"
 install -d -m 0755 /etc/exports.d
 # Only explicitly configured management subnet can access this NFS export.
 printf '%s %s(rw,sync,root_squash,no_subtree_check)\n' "$ROOT" "$CIDR" > /etc/exports.d/personal-kvm.exports
