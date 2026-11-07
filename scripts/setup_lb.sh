@@ -11,7 +11,27 @@ haproxy)
   command -v haproxy >/dev/null || die 'HAProxy binary missing'
   [[ -r /etc/haproxy/haproxy.cfg ]] || die 'HAProxy config missing'
   haproxy -c -f /etc/haproxy/haproxy.cfg || die 'Existing HAProxy configuration invalid'
-  systemctl enable --now haproxy.service
+  # Managed service starts only after an operator publishes a validated L4 definition.
+  cat >/etc/systemd/system/pkvm-haproxy.service <<UNIT
+[Unit]
+Description=Personal KVM managed HAProxy TCP service
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/haproxy/pkvm-managed.cfg
+[Service]
+Type=notify
+ExecStart=/usr/sbin/haproxy -Ws -f /etc/haproxy/pkvm-managed.cfg -p /run/pkvm-haproxy.pid
+ExecReload=/bin/kill -USR2 $MAINPID
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable pkvm-haproxy.service
   ;;
 traefik)
   TRAEFIK_BIN="$(command -v traefik || true)"
