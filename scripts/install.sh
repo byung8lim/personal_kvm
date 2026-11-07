@@ -476,6 +476,8 @@ try:
         yaml.safe_dump(data,stream,allow_unicode=True,sort_keys=False)
         stream.flush(); os.fsync(stream.fileno())
     os.chmod(path,0o640)
+    import grp
+    os.chown(path,0,grp.getgrnam('pkvm').gr_gid)
     os.replace(path,p)
 finally:
     if os.path.exists(path): os.unlink(path)
