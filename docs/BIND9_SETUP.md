@@ -32,3 +32,25 @@ dns:
 
 ## 주의 및 남은 작업
 이 스크립트는 DNS zone을 초기화하는 도구이며 기존 named의 `listen-on`, `allow-query`, SELinux, firewalld를 자동 변경하지 않습니다. 외부망에 DNS를 공개하지 말고 내부망만 허용하세요. `install.sh` 자동 호출, 설치 오류 자동 롤백 및 실제 Rocky 9/10 통합 테스트는 별도 작업입니다.
+
+
+## 기존 통합 설치기에 연결
+`scripts/install.sh` 실행 전에 다음 환경변수를 지정하면 Bind9 설치를 선택적으로 활성화합니다.
+```bash
+sudo env \
+  PKVM_SETUP_BIND9=1 \
+  PKVM_DNS_FORWARD_ZONE=internal.example \
+  PKVM_DNS_REVERSE_ZONE=60.10.10.in-addr.arpa \
+  PKVM_DNS_SERVER_IP=10.10.60.1 \
+  bash scripts/install.sh
+```
+설치 시 `/etc/personal-kvm/config.yaml`의 `dns` 섹션을 활성화하며, 파일은 `root:pkvm` 소유 및 `0640` 권한으로 저장합니다.
+이 옵션을 지정하지 않으면 기존 설치기가 Bind9를 자동 구성하지 않습니다.
+정적 회귀 점검: `bash scripts/test_bind9_install.sh`. 이 점검은 실제 DNS 응답을 검증하지 않습니다.
+
+### 아직 검증이 필요한 항목
+- Rocky 9.8/10.x 클린 OS에서 실제 패키지 설치와 named 서비스 기동
+- SELinux Enforcing 모드에서 영역 파일 동적 갱신 권한
+- DNS 리스닝 주소/내부 방화벽 규칙, 캐시 및 재시작 후 지속성
+- VM 생성/삭제와 DDNS A/PTR 정방향·역방향 실제 조회
+- 재설치, 오작동 복구, 보상 작업의 통합 테스트
