@@ -79,6 +79,16 @@ def validate(data):
         values.update(PKVM_DNS_FORWARD_ZONE=private,
                       PKVM_DNS_REVERSE_ZONE=reverse,
                       PKVM_DNS_SERVER_IP=str(ip))
+    values.update(PKVM_SETUP_NFS=int(service["nfs"]),
+                  PKVM_SETUP_HAPROXY=int(service["haproxy"]),
+                  PKVM_SETUP_TRAEFIK=int(service["traefik"]))
+    if service["nfs"]:
+        values["PKVM_NFS_DIR"] = cfg["nfs"]["NFS_DIR"]
+        values["PKVM_MGMT_CIDR"] = str(subnets["management"])
+    if service["haproxy"]:
+        values["PKVM_HAPROXY_PORT"] = str(cfg["haproxy"]["listen_port"])
+    if service["traefik"]:
+        values["PKVM_TRAEFIK_PORT"] = str(cfg["traefik"]["listen_port"])
     return values
 
 def main():
