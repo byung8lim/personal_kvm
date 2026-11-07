@@ -84,8 +84,11 @@ def validate(data):
         cfg["traefik"]["listen_port"], cfg["traefik"]["listen_port"]+1
     ):
         raise ValueError("traefik/haproxy listener ports conflict")
-    values = {"PKVM_SETUP_BIND9": int(service["bind9"])}
+    values = {"PKVM_SETUP_BIND9": int(service["bind9"]),
+              "PKVM_INTERNAL_CIDR": str(subnets["internal"]),
+              "PKVM_MGMT_CIDR": str(subnets["management"])}
     if service["bind9"]:
+        values["PKVM_EXTERNAL_DOMAIN"] = external
         values.update(PKVM_DNS_FORWARD_ZONE=private,
                       PKVM_DNS_REVERSE_ZONE=reverse,
                       PKVM_DNS_SERVER_IP=str(ip))

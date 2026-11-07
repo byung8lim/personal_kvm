@@ -18,6 +18,12 @@ if data['services']['traefik']:
         sys.exit('[오류] Traefik 설치 파일이 없습니다. 검증된 실행 파일을 먼저 배포해야 합니다.')
 PY
 bash "${ROOT}/scripts/install.sh"
+if [[ "${PKVM_SETUP_BIND9:-0}" == 1 ]]; then
+  python3 "${ROOT}/scripts/setup_split_dns.py" \
+    --private "$PKVM_DNS_FORWARD_ZONE" --external "$PKVM_EXTERNAL_DOMAIN" \
+    --reverse "$PKVM_DNS_REVERSE_ZONE" --server "$PKVM_DNS_SERVER_IP" \
+    --internal "$PKVM_INTERNAL_CIDR" --management "$PKVM_MGMT_CIDR" --apply
+fi
 # Optional components depend on the base installation's pkvm account and network.
 if [[ "${PKVM_SETUP_NFS:-0}" == 1 ]]; then
   bash "${ROOT}/scripts/setup_nfs.sh" "$PKVM_NFS_DIR" "$PKVM_MGMT_CIDR"
