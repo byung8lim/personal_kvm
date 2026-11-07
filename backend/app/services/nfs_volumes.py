@@ -1,5 +1,7 @@
 """NFS volume directory lifecycle. Never follow paths outside configured NFS_DIR."""
+import os
 import re
+import shutil
 from pathlib import Path
 
 NAME = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
@@ -37,6 +39,12 @@ def delete_volume(configured,name,mount_users):
     target=volume_path(configured,name)
     if not target.is_dir():
         raise VolumeError("Volume not found")
-    if any(target.iterdir()):
-        raise VolumeError("Nonempty volume requires a separately approved data purge")
-    target.rmdir()
+    # Only a volume owned under the dedicated configured root can be removed.
+    # No active mounts or bind mounts are allowed below the volume.
+    for current, subdirs, files in os.walk(target, followlinks=False):
+        if os.path.ismount(current):
+            raise VolumeError("Mounted volume directory cannot be deleted")
+        for dirname in subdirs:
+            if os.path.ismount(os.path.join(current, dirname)):
+                raise VolumeError("Nested mount point cannot be deleted")
+    shutil.rmtree(target)
