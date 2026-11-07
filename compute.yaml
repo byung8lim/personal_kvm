@@ -1,0 +1,23 @@
+# Declarative installation input. Replace example network values before use.
+schema_version: 1
+services:
+  bind9: false
+  nfs: false
+  traefik: false
+  haproxy: false
+domains:
+  EXTERNAL_DOMAIN: example.com
+  PRIVATE_DOMAIN: internal.example
+network:
+  public: 192.168.0.0/24
+  internal: 10.10.60.0/24
+  management: 10.10.70.0/24
+bind9:
+  server_ip: 10.10.60.1
+  reverse_zone: 60.10.10.in-addr.arpa
+nfs:
+  NFS_DIR: /srv/pkvm-shared
+traefik:
+  listen_port: 443
+haproxy:
+  listen_port: 8443
