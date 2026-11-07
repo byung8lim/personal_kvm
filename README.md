@@ -126,6 +126,16 @@ sudo bash scripts/preflight_check.sh
 sudo bash scripts/install.sh
 ```
 
+SSH 세션을 유지하지 않고 전체 설치를 자동 실행하려면 NetworkManager 브리지 전환을 명시적으로 승인해야 합니다. 콘솔/IPMI 복구 수단을 준비한 뒤 다음과 같이 실행합니다.
+
+```bash
+mkdir -p logs
+nohup sudo env PKVM_ALLOW_NONINTERACTIVE_NETWORK=1 bash scripts/install.sh \
+  >logs/install.log 2>&1 </dev/null &
+```
+
+이 환경변수는 물리 NIC를 브리지로 전환하고 NetworkManager 체크포인트 검증 성공 후 변경을 자동 확정합니다. 지정하지 않은 비대화형 실행은 네트워크 단계에서 안전하게 중단됩니다.
+
 설치 과정에서는 의존 패키지, 가상 네트워크, DB, 백엔드, 프런트엔드 빌드 및 systemd 서비스를 구성합니다. 성공 후 관리 콘솔은 기본적으로 HTTPS `443`을 사용하고, HTTP `80`/`8080`은 HTTPS로 전환되며 관리 API `8000`은 호스트 루프백에서만 수신하도록 구성합니다.
 
 초기 관리자 비밀번호는 터미널 로그에 표시하지 않고 root 전용 파일에 보관합니다.

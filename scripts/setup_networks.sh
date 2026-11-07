@@ -6,6 +6,7 @@ export LIBVIRT_DEFAULT_URI=qemu:///system
 log() { printf '[네트워크] %s\n' "$*"; }
 die() { printf '[오류] %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "필수 명령 없음: $1"; }
+noninteractive_network_allowed() { [[ "${PKVM_ALLOW_NONINTERACTIVE_NETWORK:-0}" == 1 ]]; }
 
 APPLY_BRIDGE=0
 if [[ "${1:-}" == '--apply-bridge' ]]; then APPLY_BRIDGE=1; shift; fi
@@ -121,7 +122,9 @@ if ip link show dev "$BR_BRIDGE" >/dev/null 2>&1 && \
     if [[ -n "$(virsh list --all --name | sed '/^[[:space:]]*$/d')" ]]; then
         die "libvirt default 네트워크가 ${BR_BRIDGE}를 점유합니다. VM이 존재해 자동 제거하지 않습니다."
     fi
-    [[ -t 0 && -t 1 ]] || die "기본 NAT 브리지 ${BR_BRIDGE} 해제에는 대화형 터미널이 필요합니다."
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        noninteractive_network_allowed || die "기본 NAT 브리지 ${BR_BRIDGE} 해제에는 TTY 또는 PKVM_ALLOW_NONINTERACTIVE_NETWORK=1이 필요합니다."
+    fi
     log "미사용 libvirt default 네트워크가 ${BR_BRIDGE} 점유: 기본 NAT만 정리"
     virsh net-destroy default >/dev/null 2>&1 || true
     virsh net-autostart default --disable >/dev/null 2>&1 || true
@@ -139,13 +142,23 @@ else
             die "기존 연결 프로필 $profile 발견. 오작동 방지를 위해 자동 덮어쓰기를 중단합니다."
         fi
     done
-    [[ -t 0 && -t 1 ]] || die '브리지 전환은 대화형 콘솔/SSH TTY에서만 가능합니다. 자동화 실행을 중단합니다.'
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        noninteractive_network_allowed || die '브리지 전환은 TTY 또는 PKVM_ALLOW_NONINTERACTIVE_NETWORK=1이 필요합니다.'
+    fi
     # nmcli checks out a snapshot, executes a child, then asks for confirmation.
     # Loss of SSH / no explicit confirmation causes a timed rollback.
     log "${PHYS_NIC} -> ${BR_BRIDGE} 전환 예정 (최대 180초 내 승인 없으면 자동 복구)"
     log '승인 질문에 Yes를 입력해야만 연결 변경이 확정됩니다.'
-    if ! nmcli device checkpoint --timeout 180 -- \
-        "$0" --apply-bridge "$PHYS_NIC" "$HOST_BR_IP" "$HOST_BR_GW" "$CONFIG_YAML"; then
+    CHECKPOINT_COMMAND=(nmcli device checkpoint --timeout 180 --
+        "$0" --apply-bridge "$PHYS_NIC" "$HOST_BR_IP" "$HOST_BR_GW" "$CONFIG_YAML")
+    if noninteractive_network_allowed; then
+        # Explicit automation opt-in: confirm only after the child validates
+        # bridge membership, address, and the gateway route.
+        printf 'Yes\n' | "${CHECKPOINT_COMMAND[@]}" || checkpoint_failed=1
+    else
+        "${CHECKPOINT_COMMAND[@]}" || checkpoint_failed=1
+    fi
+    if [[ "${checkpoint_failed:-0}" == 1 ]]; then
         # Checkpoint restores active device state; remove only our newly created profiles.
         nmcli connection delete "$PORT_PROFILE" >/dev/null 2>&1 || true
         nmcli connection delete "$BRIDGE_PROFILE" >/dev/null 2>&1 || true
