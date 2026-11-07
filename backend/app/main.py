@@ -1,7 +1,7 @@
 import os, uuid, psutil, hashlib, threading, logging, time
 from datetime import datetime
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, Body
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +20,7 @@ from app.services.storage_service import synchronize_storage_pools
 from app.services.image_worker import image_worker
 from app.services.bind9_ddns import Bind9Ddns, DdnsError
 from app.services.dns_inspector import dns_status
+from app.services.haproxy_l4 import render_tcp_service
 from app.schemas.requests import LoginReq, ChangePasswordReq, CreateInstanceReq, CreateDiskReq, ResizeInstanceReq, DiskActionReq
 from app.core.runtime_config import runtime_config, storage_path
 
@@ -210,6 +211,15 @@ def readiness():
     ready = all(value == "ok" or key == "qemu_path" for key, value in checks.items())
     payload = {"status": "ready" if ready else "not_ready", "version": "0.0.6", "checks": checks}
     return payload if ready else JSONResponse(status_code=503, content=payload)
+
+@app.post("/api/v1/l4/preview")
+def preview_l4_configuration(spec: dict = Body(...), _admin: str = Depends(require_active_admin)):
+    """Generate a candidate HAProxy snippet without applying host changes."""
+    try:
+        rendered = render_tcp_service(spec)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"status": "preview_only", "configuration": rendered}
 
 @app.get("/api/v1/dns/status")
 def get_dns_status(_admin: str = Depends(require_active_admin)):
