@@ -520,6 +520,13 @@ PKVM_ADMIN_USER="${ADMIN_USER}" PKVM_ADMIN_PASS="${ADMIN_PASS}" \
 PKVM_DOWNLOAD_DEFAULT_IMAGE="${PKVM_DOWNLOAD_DEFAULT_IMAGE:-1}" \
     runuser -u pkvm --preserve-environment -- ./venv/bin/python -m app.core.bootstrap_images
 
+# LB control agent only starts on explicit LB-enabled compute installations.
+if [ "${PKVM_SETUP_HAPROXY:-0}" = "1" ] || [ "${PKVM_SETUP_TRAEFIK:-0}" = "1" ]; then
+    install -D -m 0644 /etc/personal-kvm/systemd/pkvm-lb-agent.service /etc/systemd/system/pkvm-lb-agent.service
+    systemctl daemon-reload
+    systemctl enable --now pkvm-lb-agent.service
+fi
+
 CURRENT_STAGE="service-start"
 echo "[7/7] Systemd(8000) 및 Nginx(80 & 8080) 서비스 등록 및 시작..."
 install -D -m 0644 /etc/personal-kvm/systemd/pkvm-backend.service /etc/systemd/system/pkvm-backend.service

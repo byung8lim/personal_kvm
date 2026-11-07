@@ -24,6 +24,7 @@ from app.services.dns_reconciler import review as review_dns, apply_missing as a
 from app.services.haproxy_l4 import render_tcp_service
 from app.services.traefik_l7 import render_yaml as render_l7_yaml
 from app.services.nfs_volumes import create_volume, delete_volume, VolumeError
+from app.services.lb_agent_client import request as lb_agent_request
 from app.schemas.requests import LoginReq, ChangePasswordReq, CreateInstanceReq, CreateDiskReq, ResizeInstanceReq, DiskActionReq
 from app.core.runtime_config import runtime_config, storage_path
 
@@ -240,6 +241,45 @@ def create_lb_service(spec: dict = Body(...), db: Session = Depends(get_db),
     db.commit()
     db.refresh(record)
     return {"id":record.id,"name":record.name,"status":record.status,"preview":rendered}
+
+@app.post("/api/v1/lb/services/{service_id}/apply")
+def apply_lb_service(service_id:int,db: Session = Depends(get_db),
+                     _admin: str = Depends(require_active_admin)):
+    item=db.query(ManagedLbService).filter(ManagedLbService.id==service_id).with_for_update().first()
+    if not item: raise HTTPException(status_code=404,detail="Load balancer not found")
+    spec=json.loads(item.specification)
+    try:
+        if item.layer=="L7":
+            result=lb_agent_request("apply_l7",service=spec)
+        elif item.layer=="L4":
+            # Reapply every managed L4 listener in one atomic HAProxy config.
+            services=db.query(ManagedLbService).filter(ManagedLbService.layer=="L4",
+                ManagedLbService.status.in_(("ACTIVE","DRAFT","ERROR"))).all()
+            specs=[json.loads(s.specification) for s in services
+                   if s.status=="ACTIVE" or s.id==service_id]
+            result=lb_agent_request("apply_l4",services=specs)
+        else:
+            raise ValueError("Unsupported LB layer")
+    except (RuntimeError,OSError,ValueError,TimeoutError) as exc:
+        item.status="ERROR"
+        item.error_message=type(exc).__name__
+        db.commit()
+        raise HTTPException(status_code=503,detail="Deployment failed; inspect LB agent logs")
+    item.status="ACTIVE";item.error_message=None
+    db.commit()
+    return {"id":item.id,**result}
+
+@app.post("/api/v1/lb/services/{service_id}/failback")
+def lb_service_failback(service_id:int,db: Session = Depends(get_db),
+                        _admin: str = Depends(require_active_admin)):
+    item=db.query(ManagedLbService).filter(ManagedLbService.id==service_id).first()
+    if not item or item.layer!="L4" or item.status!="ACTIVE":
+        raise HTTPException(status_code=404,detail="Active L4 service not found")
+    try:
+        result=lb_agent_request("failback",name=item.name)
+    except (RuntimeError,OSError,TimeoutError):
+        raise HTTPException(status_code=409,detail="Primary health check or runtime failback failed")
+    return {"id":item.id,**result}
 
 @app.delete("/api/v1/lb/services/{service_id}")
 def delete_lb_service(service_id: int, db: Session = Depends(get_db),

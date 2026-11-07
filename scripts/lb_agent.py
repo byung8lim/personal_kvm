@@ -79,6 +79,8 @@ class Handler(socketserver.BaseRequestHandler):
 def main():
     if os.geteuid()!=0: raise PermissionError("root required")
     SOCKET.parent.mkdir(mode=0o750,parents=True,exist_ok=True)
+    os.chown(SOCKET.parent,0,grp.getgrnam("pkvm").gr_gid)
+    os.chmod(SOCKET.parent,0o750)
     if SOCKET.exists(): SOCKET.unlink()
     with socketserver.ThreadingUnixStreamServer(str(SOCKET),Handler) as server:
         os.chown(SOCKET,0,grp.getgrnam("pkvm").gr_gid)
