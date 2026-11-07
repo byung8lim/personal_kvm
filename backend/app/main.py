@@ -20,6 +20,7 @@ from app.services.storage_service import synchronize_storage_pools
 from app.services.image_worker import image_worker
 from app.services.bind9_ddns import Bind9Ddns, DdnsError
 from app.services.dns_inspector import dns_status
+from app.services.dns_reconciler import review as review_dns, apply_missing as apply_dns_missing
 from app.services.haproxy_l4 import render_tcp_service
 from app.services.traefik_l7 import render_yaml as render_l7_yaml
 from app.services.nfs_volumes import create_volume, delete_volume, VolumeError
@@ -308,6 +309,23 @@ def preview_l4_configuration(spec: dict = Body(...), _admin: str = Depends(requi
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"status": "preview_only", "configuration": rendered}
+
+@app.get("/api/v1/dns/reconcile")
+def dns_reconcile_preview(db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+    updater = configured_ddns()
+    if updater is None:
+        raise HTTPException(status_code=503,detail="DNS updates are disabled")
+    rows=db.query(Instance).filter(Instance.state.in_(("RUNNING","STOPPED"))).all()
+    return {"status":"preview","findings":review_dns(updater,rows)}
+
+@app.post("/api/v1/dns/reconcile")
+def dns_reconcile_apply(db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+    updater = configured_ddns()
+    if updater is None:
+        raise HTTPException(status_code=503,detail="DNS updates are disabled")
+    rows=db.query(Instance).filter(Instance.state.in_(("RUNNING","STOPPED"))).all()
+    result=apply_dns_missing(updater,rows,max_changes=50)
+    return {"status":"attempted","findings":result}
 
 @app.get("/api/v1/dns/status")
 def get_dns_status(_admin: str = Depends(require_active_admin)):
