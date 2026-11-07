@@ -729,10 +729,18 @@ def list_networks(db: Session = Depends(get_db), _admin: str = Depends(require_a
     return res
 
 @app.get("/api/v1/ip-pools")
-def list_ip_pools(network_id: int = None, offset: int = 0, limit: int = 100, db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+def list_ip_pools(network_id: int = None, network_type: str = None, allocation: str = "ALL", offset: int = 0, limit: int = 100, db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+    if allocation not in ("ALL", "USED", "AVAILABLE"):
+        raise HTTPException(status_code=422, detail="allocation은 ALL, USED, AVAILABLE 중 하나여야 합니다.")
     query = db.query(IpPool, VirtualNetwork, Instance).join(VirtualNetwork, IpPool.network_id == VirtualNetwork.id).outerjoin(Instance, IpPool.instance_id == Instance.id)
     if network_id is not None:
         query = query.filter(IpPool.network_id == network_id)
+    if network_type:
+        query = query.filter(VirtualNetwork.net_type == network_type)
+    if allocation == "USED":
+        query = query.filter(IpPool.status == "ASSIGNED")
+    elif allocation == "AVAILABLE":
+        query = query.filter(IpPool.status == "AVAILABLE")
     rows = query.order_by(VirtualNetwork.id, IpPool.ip_address).offset(max(offset, 0)).limit(min(max(limit, 1), 500)).all()
     return [{"id": ip.id, "network": net.net_name, "ip": ip.ip_address, "status": ip.status,
              "instance_id": inst.id if inst else None, "instance_name": inst.name if inst else None,
