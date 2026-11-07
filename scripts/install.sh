@@ -1,5 +1,5 @@
 #!/bin/bash
-# scripts/install.sh : 퍼스널 KVM 가상화 서비스 v0.1.1 설치
+# scripts/install.sh : 퍼스널 KVM 가상화 서비스 v0.1.9 설치
 set -euo pipefail
 
 if [ "${EUID}" -ne 0 ]; then
@@ -44,6 +44,7 @@ require_project_file "frontend/package.json"
 require_project_file "frontend/package-lock.json"
 require_project_file "frontend/index.html"
 require_project_file "config/systemd/pkvm-backend.service"
+require_project_file "config/systemd/pkvm-lb-agent.service"
 require_project_file "config/systemd/pkvm-tls-renew.service"
 require_project_file "config/systemd/pkvm-tls-renew.timer"
 require_project_file "config/nginx/personal-kvm.conf"
@@ -66,7 +67,7 @@ HOST_BR_GW="${PKVM_HOST_BR_GW:-$(ip route | awk '/default/ {print $3; exit}')}"
 HOST_BR_GW="${HOST_BR_GW:-192.168.0.1}"
 
 echo "=================================================================="
-echo " 퍼스널 KVM 가상화 서비스 v0.1.1 설치 시작 (Rocky Linux 9.x / 10.x)"
+echo " 퍼스널 KVM 가상화 서비스 v0.1.9 설치 시작 (Rocky Linux 9.x / 10.x)"
 echo "=================================================================="
 
 INSTALL_STATE_DIR="/var/lib/personal-kvm/install-state"
@@ -89,10 +90,8 @@ on_install_exit() {
         echo "[진단] 실패 단계: ${CURRENT_STAGE}" >&2
         systemctl status pkvm-backend.service nginx --no-pager >&2 || true
         journalctl -u pkvm-backend.service -u nginx -n 100 --no-pager >&2 || true
-        if [ -s /etc/personal-kvm/.initial_admin_password ]; then
-            echo "[안내] 초기 관리자: ${ADMIN_USER} / $(tr -d '\r\n' < /etc/personal-kvm/.initial_admin_password)" >&2
-            echo "[안내] 암호 재확인: sudo cat /etc/personal-kvm/.initial_admin_password" >&2
-        fi
+        echo '[안내] 초기 관리자 비밀번호는 로그에 표시하지 않습니다.' >&2
+        echo '[안내] 필요 시 sudo cat /etc/personal-kvm/.initial_admin_password' >&2
     fi
 }
 trap on_install_exit EXIT
@@ -547,6 +546,7 @@ if [ "${LIBVIRT_UNITS[0]}" = 'libvirtd.service' ]; then
 fi
 install -D -m 0644 /etc/personal-kvm/systemd/pkvm-tls-renew.service /etc/systemd/system/pkvm-tls-renew.service
 install -D -m 0644 /etc/personal-kvm/systemd/pkvm-tls-renew.timer /etc/systemd/system/pkvm-tls-renew.timer
+install -D -m 0644 /etc/personal-kvm/systemd/pkvm-lb-agent.service /etc/systemd/system/pkvm-lb-agent.service
 install -D -m 0644 /etc/personal-kvm/nginx/personal-kvm.conf /etc/nginx/conf.d/personal-kvm.conf
 rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
 
@@ -581,6 +581,13 @@ fi
 
 systemctl daemon-reload
 systemctl enable pkvm-backend.service
+systemctl enable pkvm-lb-agent.service
+systemctl restart pkvm-lb-agent.service
+if ! systemctl is-active --quiet pkvm-lb-agent.service || [ ! -S /run/pkvm-lb-agent/control.sock ]; then
+    echo '[오류] LB Agent 기동 또는 보호된 UNIX 소켓 생성 실패' >&2
+    journalctl -u pkvm-lb-agent.service -n 50 --no-pager >&2 || true
+    exit 1
+fi
 systemctl enable --now pkvm-tls-renew.timer
 systemctl restart pkvm-backend.service
 
@@ -700,7 +707,7 @@ fi
 
 HOST_IP="$(hostname -I | awk '{print $1}')"
 cat > /etc/personal-kvm/install-summary <<EOF
-Personal KVM v0.0.7
+Personal KVM v0.1.9
 Console: https://${HOST_IP}/
 Admin user: ${ADMIN_USER}
 Password file: /etc/personal-kvm/.initial_admin_password
@@ -708,15 +715,16 @@ Installed: $(date --iso-8601=seconds)
 EOF
 chmod 0600 /etc/personal-kvm/install-summary
 echo "=================================================================="
-echo " [설치 완료] 퍼스널 KVM 가상화 서비스 v0.0.7 정상 구동 중!"
+echo " [설치 완료] 퍼스널 KVM 가상화 서비스 v0.1.9 정상 구동 중!"
 echo " - 관리 콘솔           : https://${HOST_IP}/"
 echo " - HTTP 80/8080 요청은 HTTPS로 전환됩니다."
 echo " - 백엔드 8000 포트는 127.0.0.1에서만 수신합니다."
 echo " - API Swagger 문서    : https://${HOST_IP}/docs"
-echo " - 초기 어드민 계정    : ${ADMIN_USER} / ${ADMIN_PASS}"
+echo " - 초기 어드민 계정    : ${ADMIN_USER} (비밀번호는 아래 root 전용 파일에서 조회)"
+echo " - 초기 비밀번호 파일   : /etc/personal-kvm/.initial_admin_password"
 echo " - 설치 정보 재확인    : sudo cat /etc/personal-kvm/install-summary"
 if [ "${ADMIN_PASSWORD_GENERATED}" -eq 1 ]; then
-    echo " - 위 초기 비밀번호는 자동 생성되었습니다. 지금 안전한 곳에 보관하십시오."
+    echo " - 초기 비밀번호가 자동 생성되었습니다. 서버에서 root 권한으로 확인하십시오."
 fi
 INSTALL_COMPLETED=1
 rm -f "${INSTALL_STATE_DIR}/failed-stage"

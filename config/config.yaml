@@ -1,5 +1,5 @@
 service:
-  version: "0.0.6"
+  version: "0.1.9"
   host: "0.0.0.0"
   port: 8000
   web_port: 8080

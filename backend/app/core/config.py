@@ -9,7 +9,7 @@ def parse_allowed_origins(value: str) -> list[str]:
     return origins
 
 class Settings(BaseSettings):
-    APP_VERSION: str = "0.0.6"
+    APP_VERSION: str = "0.1.9"
     DATABASE_URL: str
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"

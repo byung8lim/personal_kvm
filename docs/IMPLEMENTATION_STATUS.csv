@@ -17,3 +17,9 @@ loadbalancer,DNS01 wildcard ACME,not_verified,not_tested,requirements,inspect_an
 deployment,declarative cluster YAML,not_verified,not_tested,requirements,implement_apply_cli
 observability,Prometheus Grafana exporters,not_verified,not_tested,requirements,implement_addon
 docs,Bind9 installation documentation,implemented,not_applicable,863cd60,maintain
+v019,HA failover and bounded TCP drain,implemented,unit_tests_passed,backend/tests/test_v019_ha_manager.py,real_TCP_session_test_on_Rocky
+v019,Live HAProxy status via LB agent,implemented,unit_mock_only,scripts/lb_agent.py;backend/app/main.py,systemd_socket_and_runtime_test
+v019,DNS actual A/PTR comparison,implemented,unit_mock_only,backend/tests/test_v019_dns_traefik.py,named_view_and_live_DNS_test
+v019,Traefik 3.4+ 4 strategies,implemented,unit_mock_only,backend/app/services/traefik_l7.py,real_binary_and_distribution_test
+v019,LB agent installation,implemented,static_check_only,scripts/install.sh,Rocky9_10_install_test
+v019,Read-only diagnostics,implemented,shell_syntax_passed,scripts/diagnose.sh,run_on_Rocky_server

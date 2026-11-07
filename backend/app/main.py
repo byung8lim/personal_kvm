@@ -19,7 +19,7 @@ from app.services.vm_provisioner import ProvisioningError, VmProvisioner, resolv
 from app.services.storage_service import synchronize_storage_pools
 from app.services.image_worker import image_worker
 from app.services.bind9_ddns import Bind9Ddns, DdnsError
-from app.services.dns_inspector import dns_status
+from app.services.dns_inspector import dns_status, inspect_owned_pair
 from app.services.dns_reconciler import review as review_dns, apply_missing as apply_dns_missing
 from app.services.haproxy_l4 import render_tcp_service
 from app.services.traefik_l7 import render_yaml as render_l7_yaml
@@ -43,7 +43,7 @@ def configured_ddns():
     return Bind9Ddns(dns["server"], dns["key_file"], dns["forward_zone"],
                      dns["reverse_zone"], ttl=int(dns.get("ttl", 300)))
 
-app = FastAPI(title="퍼스널 KVM 가상화 서비스 API", version="0.0.8")
+app = FastAPI(title="퍼스널 KVM 가상화 서비스 API", version="0.1.9")
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(_request: Request, exc: RequestValidationError):
@@ -186,7 +186,7 @@ def remove_managed_disk_file(file_path: str) -> None:
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "0.0.6"}
+    return {"status": "ok", "version": "0.1.9"}
 
 @app.get("/api/health/ready")
 def readiness():
@@ -214,7 +214,7 @@ def readiness():
         check_name = f"bridge_{network_name}"
         checks[check_name] = "ok" if bridge and Path("/sys/class/net", bridge).exists() else f"missing: {bridge}"
     ready = all(value == "ok" or key == "qemu_path" for key, value in checks.items())
-    payload = {"status": "ready" if ready else "not_ready", "version": "0.0.6", "checks": checks}
+    payload = {"status": "ready" if ready else "not_ready", "version": "0.1.9", "checks": checks}
     return payload if ready else JSONResponse(status_code=503, content=payload)
 
 @app.get("/api/v1/lb/services")
@@ -366,6 +366,88 @@ def dns_reconcile_apply(db: Session = Depends(get_db), _admin: str = Depends(req
     rows=db.query(Instance).filter(Instance.state.in_(("RUNNING","STOPPED"))).all()
     result=apply_dns_missing(updater,rows,max_changes=50)
     return {"status":"attempted","findings":result}
+
+
+@app.get("/api/v1/dns/zones")
+def list_dns_zones(_admin: str = Depends(require_active_admin)):
+    status_info = dns_status(runtime_config().get("dns") or {})
+    return {"enabled": status_info.get("enabled", False), "status": status_info.get("status", "disabled"),
+            "views": (runtime_config().get("dns") or {}).get("views", []),
+            "view_verification": "not_checked_from_each_client_network",
+            "zones": status_info.get("zones", [])}
+
+@app.get("/api/v1/dns/records")
+def list_dns_records(limit: int = 10, offset: int = 0, db: Session = Depends(get_db),
+                     _admin: str = Depends(require_active_admin)):
+    if not 1 <= limit <= 25 or offset < 0:
+        raise HTTPException(status_code=422, detail="limit must be 1..25; offset >= 0")
+    dns_cfg = runtime_config().get("dns") or {}
+    f_zone = (dns_cfg.get("forward_zone") or "internal.example").rstrip(".")
+    rows = (db.query(Instance).filter(Instance.state != "DELETED")
+            .order_by(Instance.id.desc()).offset(offset).limit(limit).all())
+    records = []
+    for r in rows:
+        result = {"instance_id": r.id, "instance_name": r.name,
+                  "dns_hostname": r.dns_hostname, "private_ip": r.private_ip,
+                  "state": r.state}
+        if not dns_cfg.get("enabled", False):
+            result["verification"] = {"status": "dns_disabled"}
+        elif not r.private_ip or not r.dns_hostname:
+            result["verification"] = {"status": "no_owned_record"}
+        elif not all(dns_cfg.get(x) for x in ("server", "forward_zone", "reverse_zone")):
+            result["verification"] = {"status": "dns_misconfigured"}
+        else:
+            result["verification"] = inspect_owned_pair(
+                dns_cfg["server"], r.dns_hostname, r.private_ip,
+                f_zone, dns_cfg["reverse_zone"])
+        records.append(result)
+    return {"records": records, "offset": offset, "limit": limit,
+            "view_verification": "source_ip_dependent"}
+
+@app.get("/api/v1/load-balancers")
+def list_load_balancers_alias(db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+    return list_lb_services(db=db, _admin=_admin)
+
+@app.post("/api/v1/load-balancers", status_code=201)
+def create_load_balancer_alias(spec: dict = Body(...), db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+    return create_lb_service(spec=spec, db=db, _admin=_admin)
+
+@app.get("/api/v1/load-balancers/{service_id}")
+def get_load_balancer_detail(service_id: int, db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+    item = db.query(ManagedLbService).filter(ManagedLbService.id == service_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Load balancer not found")
+    return {"id": item.id, "name": item.name, "layer": item.layer, "status": item.status,
+            "specification": json.loads(item.specification), "error_message": item.error_message}
+
+@app.get("/api/v1/load-balancers/{service_id}/health")
+def get_load_balancer_health(service_id: int, db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+    item = db.query(ManagedLbService).filter(ManagedLbService.id == service_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Load balancer not found")
+    if item.layer != "L4" or item.status != "ACTIVE":
+        return {"id": item.id, "name": item.name, "status": item.status,
+                "runtime_status": "unavailable", "failback_available": False}
+    try:
+        observed = lb_agent_request("health_l4", name=item.name)
+    except (OSError, RuntimeError, TimeoutError):
+        raise HTTPException(status_code=503, detail="HAProxy live health unavailable; inspect LB agent and HA monitor logs")
+    return {"id": item.id, "name": item.name, "layer": item.layer,
+            "configured_status": item.status, "runtime_status": "observed", **observed}
+
+@app.post("/api/v1/load-balancers/{service_id}/failback")
+def failback_load_balancer_alias(service_id: int, db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+    return lb_service_failback(service_id=service_id, db=db, _admin=_admin)
+
+@app.get("/api/v1/operations/{operation_uuid}")
+def get_operation_by_uuid(operation_uuid: str, db: Session = Depends(get_db), _admin: str = Depends(require_active_admin)):
+    row = db.query(ResourceOperation).filter(ResourceOperation.operation_uuid == operation_uuid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Operation not found")
+    return {"id": row.id, "operation_uuid": row.operation_uuid, "resource_type": row.resource_type,
+            "resource_id": row.resource_id, "action": row.action, "previous_state": row.previous_state,
+            "target_state": row.target_state, "status": row.status, "error_message": row.error_message,
+            "started_at": row.started_at, "completed_at": row.completed_at}
 
 @app.get("/api/v1/dns/status")
 def get_dns_status(_admin: str = Depends(require_active_admin)):
@@ -966,7 +1048,14 @@ def list_ip_pools(network_id: int = None, network_type: str = None, allocation: 
     if network_id is not None:
         query = query.filter(IpPool.network_id == network_id)
     if network_type:
-        query = query.filter(VirtualNetwork.net_type == network_type)
+        alias_map = {
+            "Public-Bridged": "BRIDGED",
+            "Public-NAT": "NAT",
+            "Internal-Service": "INTERNAL",
+            "Management-Net": "MANAGEMENT",
+        }
+        normalized_type = alias_map.get(network_type, network_type)
+        query = query.filter((VirtualNetwork.net_type == normalized_type) | (VirtualNetwork.net_name == network_type))
     if allocation == "USED":
         query = query.filter(IpPool.status == "ASSIGNED")
     elif allocation == "AVAILABLE":
@@ -1028,4 +1117,4 @@ def serve_spa_root():
     idx = Path(settings.FRONTEND_DIST_DIR) / "index.html"
     if idx.exists():
         return FileResponse(idx)
-    return {"message": "Personal KVM Service v0.0.6 API Running", "docs": "/docs"}
+    return {"message": "Personal KVM Service v0.1.9 API Running", "docs": "/docs"}

@@ -53,8 +53,20 @@ def handle(request):
         if not isinstance(name,str) or not name.isascii() or not name.replace("-","").replace("_","").isalnum():
             raise ValueError("Invalid service name")
         subprocess.run([sys.executable,"/opt/personal-kvm/scripts/ha_manager.py","--failback",name],
-                       check=True,timeout=20,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                       check=True,timeout=95,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         return {"status":"primary_restored"}
+    if action=="health_l4":
+        name=request.get("name")
+        if not isinstance(name,str) or not name.isascii() or not name.replace("-","").replace("_","").isalnum():
+            raise ValueError("Invalid service name")
+        # Query HAProxy's privileged UNIX socket, not cached database state.
+        # The module reads only HA configuration, runtime counters and TCP reachability.
+        import importlib.util
+        module_path="/opt/personal-kvm/scripts/ha_manager.py"
+        spec=importlib.util.spec_from_file_location("pkvm_ha_manager",module_path)
+        mod=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.health(name)
     raise ValueError("Unknown LB action")
 
 class Handler(socketserver.BaseRequestHandler):

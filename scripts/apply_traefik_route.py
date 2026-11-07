@@ -13,16 +13,18 @@ from pathlib import Path
 import re
 import sys
 import tempfile
-from app.services.traefik_l7 import render_yaml
+from app.services.traefik_l7 import render_yaml, verify_traefik_version
 
 ROOT = Path("/etc/personal-kvm/traefik/dynamic")
 NAME = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 
-def publish(spec, root=ROOT):
+def publish(spec, root=ROOT, *, verify_binary=True):
     name = spec.get("name")
     if not isinstance(name, str) or not NAME.fullmatch(name):
         raise ValueError("Invalid route name")
     content = render_yaml(spec)
+    if verify_binary:
+        verify_traefik_version()
     if root.is_symlink() or not root.is_dir():
         raise RuntimeError("Traefik dynamic directory is missing or unsafe")
     path = root / (name + ".yaml")

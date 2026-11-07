@@ -25,6 +25,41 @@ def query_record(server, fqdn, record_type, *, executor=subprocess.run):
         raise RuntimeError("DNS query failed")
     return [x for x in result.stdout.splitlines() if x.strip()][:100]
 
+
+def inspect_owned_pair(server, hostname, ip, forward_zone, reverse_zone,
+                       *, lookup=query_record):
+    """Compare the DB's expected A/PTR to live authoritative DNS responses.
+
+    This tests the querying host's source view only; it does not assert that
+    every split-DNS client sees the same records.
+    """
+    address = ipaddress.IPv4Address(ip)
+    fqdn = validated_name(hostname + "." + forward_zone.rstrip("."))
+    pointer = address.reverse_pointer + "."
+    if not pointer.endswith(validated_name(reverse_zone)):
+        return {"status": "out_of_zone", "fqdn": fqdn,
+                "expected_a": str(address), "expected_ptr": fqdn}
+    try:
+        a_lines = lookup(server, fqdn, "A")
+        ptr_lines = lookup(server, pointer, "PTR")
+    except (ValueError, OSError, RuntimeError, subprocess.TimeoutExpired):
+        return {"status": "query_failed", "fqdn": fqdn,
+                "expected_a": str(address), "expected_ptr": fqdn}
+    a = {m.group(1) for line in a_lines
+         if (m := re.search(r"\sIN\s+A\s+([\d.]+)\s*$", line, re.I))}
+    ptr = {m.group(1).lower() for line in ptr_lines
+           if (m := re.search(r"\sIN\s+PTR\s+(\S+)\s*$", line, re.I))}
+    wanted = fqdn.lower()
+    if a == {str(address)} and ptr == {wanted}:
+        status = "ok"
+    elif a or ptr:
+        status = "conflict" if (a and a != {str(address)}) or (ptr and ptr != {wanted}) else "missing"
+    else:
+        status = "missing"
+    return {"status": status, "fqdn": fqdn, "expected_a": str(address),
+            "expected_ptr": wanted, "actual_a": sorted(a), "actual_ptr": sorted(ptr),
+            "view": "source_ip_dependent"}
+
 def dns_status(config, *, executor=subprocess.run):
     if not config.get("enabled", False):
         return {"enabled": False, "status": "disabled", "zones": []}

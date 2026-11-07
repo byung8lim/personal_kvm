@@ -55,6 +55,16 @@ UNIT
 traefik)
   TRAEFIK_BIN="$(command -v traefik || true)"
   [[ -n "$TRAEFIK_BIN" ]] || die 'Verified Traefik binary must be installed in PATH'
+  # All 4 requested strategies are available in Traefik >= 3.4.
+  TRAEFIK_VERSION="$($TRAEFIK_BIN version | awk '/^Version:/ {print $2; exit}')"
+  if ! python3 - "$TRAEFIK_VERSION" <<'PY'
+import re,sys
+v=re.match(r'^v?(\d+)\.(\d+)(?:\.\d+)?',sys.argv[1])
+sys.exit(0 if v and (int(v[1]),int(v[2])) >= (3,4) else 1)
+PY
+  then
+    die 'Traefik >= 3.4 필수: 설치된 버전 확인 실패 또는 지원 버전 미달'
+  fi
   # Treat port as HTTPS (websecure); HTTP binds to adjacent high port.
   HTTP_PORT=$((PORT+1))
   id -u pkvm-traefik >/dev/null 2>&1 || useradd -r -s /sbin/nologin -d /var/lib/pkvm-traefik pkvm-traefik

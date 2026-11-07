@@ -5,6 +5,16 @@ if [ "${EUID}" -ne 0 ]; then
     exit 1
 fi
 export LIBVIRT_DEFAULT_URI="qemu:///system"
+
+if command -v mariadb >/dev/null 2>&1 || command -v mysql >/dev/null 2>&1; then
+    DB_CHECK_CLI=$(command -v mariadb || command -v mysql)
+    DB_ACTIVE_VMS=$("${DB_CHECK_CLI}" -N -s -u root -e "SELECT name FROM personal_kvm.instances WHERE state IN ('RUNNING','STARTING','CREATING','STOPPING','RESIZING');" 2>/dev/null || true)
+    if [ -n "${DB_ACTIVE_VMS}" ]; then
+        echo "[경고] DB에 활성 상태인 가상 인스턴스가 존재합니다: ${DB_ACTIVE_VMS}"
+        exit 1
+    fi
+fi
+
 INSTALL_STATE_DIR="/var/lib/personal-kvm/install-state"
 
 if command -v virsh >/dev/null 2>&1; then
@@ -65,9 +75,15 @@ fi
 
 systemctl stop pkvm-backend.service 2>/dev/null || true
 systemctl disable pkvm-backend.service 2>/dev/null || true
+systemctl disable --now pkvm-lb-agent.service 2>/dev/null || true
+systemctl disable --now pkvm-ha-monitor.service 2>/dev/null || true
+systemctl disable --now pkvm-haproxy.service 2>/dev/null || true
+systemctl disable --now pkvm-traefik.service 2>/dev/null || true
 systemctl disable --now pkvm-tls-renew.timer 2>/dev/null || true
 rm -f /etc/systemd/system/pkvm-backend.service /etc/systemd/system/pkvm-tls-renew.service \
-    /etc/systemd/system/pkvm-tls-renew.timer /etc/nginx/conf.d/personal-kvm.conf
+    /etc/systemd/system/pkvm-tls-renew.timer /etc/systemd/system/pkvm-lb-agent.service \
+    /etc/systemd/system/pkvm-ha-monitor.service /etc/systemd/system/pkvm-haproxy.service \
+    /etc/systemd/system/pkvm-traefik.service /etc/nginx/conf.d/personal-kvm.conf
 rm -f /etc/sysctl.d/99-kvm-net.conf /etc/qemu/bridge.conf /etc/qemu-kvm/bridge.conf
 if [ -f "${INSTALL_STATE_DIR}/nginx.conf.before" ]; then
     cp -a "${INSTALL_STATE_DIR}/nginx.conf.before" /etc/nginx/nginx.conf
