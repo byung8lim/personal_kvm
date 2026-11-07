@@ -1,0 +1,19 @@
+[Unit]
+Description=Personal KVM privileged LB deployment agent
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/personal-kvm/backend
+Environment=PYTHONPATH=/opt/personal-kvm/backend
+ExecStart=/opt/personal-kvm/backend/venv/bin/python /opt/personal-kvm/scripts/lb_agent.py
+RuntimeDirectory=pkvm-lb-agent
+RuntimeDirectoryMode=0750
+Restart=on-failure
+RestartSec=5
+ProtectHome=true
+NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target
