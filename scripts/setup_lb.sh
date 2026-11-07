@@ -1,17 +1,67 @@
 #!/usr/bin/env bash
+# Explicit opt-in LB service bootstrap, no secret or public listener auto-generation.
 set -euo pipefail
-[[ $EUID -eq 0 && $# -eq 2 ]] || { echo 'Usage: sudo setup_lb.sh <traefik|haproxy> <port>' >&2; exit 2; }
+die(){ echo "[LB 오류] $*" >&2; exit 1; }
+[[ $EUID -eq 0 && $# -eq 2 ]] || die 'Usage: sudo setup_lb.sh <traefik|haproxy> <port>'
 SERVICE="$1"; PORT="$2"
-[[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( PORT>=1 && PORT<=65535 )) || exit 2
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( PORT>=1 && PORT<=65534 )) || die 'Invalid port'
 case "$SERVICE" in
-  haproxy)
-    rpm -q haproxy >/dev/null 2>&1 || dnf install -y haproxy
-    haproxy -c -f /etc/haproxy/haproxy.cfg
-    systemctl enable --now haproxy
-    ;;
-  traefik)
-    command -v traefik >/dev/null 2>&1 || { echo 'Traefik binary not available in configured repositories. Supply a verified package.' >&2; exit 2; }
-    traefik version
-    ;;
-  *) echo 'Unknown LB engine' >&2; exit 2;;
+haproxy)
+  rpm -q haproxy >/dev/null 2>&1 || dnf install -y haproxy
+  command -v haproxy >/dev/null || die 'HAProxy binary missing'
+  [[ -r /etc/haproxy/haproxy.cfg ]] || die 'HAProxy config missing'
+  haproxy -c -f /etc/haproxy/haproxy.cfg || die 'Existing HAProxy configuration invalid'
+  systemctl enable --now haproxy.service
+  ;;
+traefik)
+  TRAEFIK_BIN="$(command -v traefik || true)"
+  [[ -n "$TRAEFIK_BIN" ]] || die 'Verified Traefik binary must be installed in PATH'
+  # Treat port as HTTPS (websecure); HTTP binds to adjacent high port.
+  HTTP_PORT=$((PORT+1))
+  id -u pkvm-traefik >/dev/null 2>&1 || useradd -r -s /sbin/nologin -d /var/lib/pkvm-traefik pkvm-traefik
+  install -d -o root -g pkvm-traefik -m 0750 /etc/personal-kvm/traefik
+  install -d -o root -g pkvm-traefik -m 0750 /etc/personal-kvm/traefik/dynamic
+  cat >/etc/personal-kvm/traefik/traefik.yaml <<YAML
+entryPoints:
+  web:
+    address: ":$HTTP_PORT"
+  websecure:
+    address: ":$PORT"
+providers:
+  file:
+    directory: /etc/personal-kvm/traefik/dynamic
+    watch: true
+api:
+  dashboard: false
+  insecure: false
+log:
+  level: INFO
+YAML
+  chown root:pkvm-traefik /etc/personal-kvm/traefik/traefik.yaml
+  chmod 0640 /etc/personal-kvm/traefik/traefik.yaml
+  cat >/etc/systemd/system/pkvm-traefik.service <<UNIT
+[Unit]
+Description=Personal KVM Traefik L7 proxy
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=pkvm-traefik
+Group=pkvm-traefik
+ExecStart=$TRAEFIK_BIN --configFile=/etc/personal-kvm/traefik/traefik.yaml
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now pkvm-traefik.service
+  systemctl is-active --quiet pkvm-traefik.service || die 'Traefik did not start'
+  ;;
+*) die 'Unknown LB engine';;
 esac
