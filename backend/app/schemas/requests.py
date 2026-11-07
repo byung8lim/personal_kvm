@@ -20,6 +20,7 @@ class ChangePasswordReq(BaseModel):
 
 class CreateInstanceReq(BaseModel):
     name: str = Field(min_length=1, max_length=63, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+    hostname: Optional[str] = Field(default=None, max_length=63, pattern=r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
     os_image_id: int = Field(gt=0)
     guest_username: str = Field(default="kvmadmin", min_length=1, max_length=32, pattern=r"^[a-z_][a-z0-9_-]*$")
     guest_password: str = Field(min_length=12, max_length=128)
@@ -30,6 +31,10 @@ class CreateInstanceReq(BaseModel):
     public_net_type: Optional[Literal["BRIDGED", "NAT"]] = "NAT"
     internal_network: bool = True
     management_network: bool = False
+
+    @property
+    def effective_hostname(self) -> str:
+        return self.hostname or self.name
 
     @model_validator(mode="after")
     def validate_guest_credentials(self):

@@ -103,12 +103,12 @@ class VmProvisioner:
         if result.returncode:
             raise ProvisioningError(result.stderr.strip() or "게스트 이미지 커스터마이즈 실패")
 
-    def create_cloud_init_seed(self, destination: str, name: str, networks: List[dict], guest_username: str = "kvmadmin", guest_password: str = None) -> None:
+    def create_cloud_init_seed(self, destination: str, name: str, networks: List[dict], guest_username: str = "kvmadmin", guest_password: str = None, guest_hostname: str = None) -> None:
         destination_path = Path(destination)
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as folder:
             folder_path = Path(folder)
-            (folder_path / "meta-data").write_text(f"instance-id: {name}\nlocal-hostname: {name}\n", encoding="utf-8")
+            (folder_path / "meta-data").write_text(f"instance-id: {name}\nlocal-hostname: {guest_hostname or name}\n", encoding="utf-8")
             public_key_path = Path(self.ssh_public_key_path)
             if not public_key_path.is_file():
                 raise ProvisioningError(f"SSH public key file does not exist: {public_key_path}")
@@ -121,7 +121,7 @@ class VmProvisioner:
             password_hash = sha512_crypt.hash(guest_password)
             user_config = {
                 # Cloud-init must not replace the guest's preexisting /etc/hosts.
-                "preserve_hostname": False, "hostname": name, "manage_etc_hosts": False,
+                "preserve_hostname": False, "hostname": guest_hostname or name, "manage_etc_hosts": False,
                 "ssh_pwauth": True, "disable_root": True,
                 "users": [{"name": guest_username, "gecos": "KVM administrator",
                            "groups": "wheel,sudo", "shell": "/bin/bash", "lock_passwd": False,
@@ -237,7 +237,7 @@ class VmProvisioner:
 
     def provision(self, name: str, image: str, root_path: str, root_gb: int, extra_path: str,
                   extra_gb: int, memory_gb: int, vcores: int, bridges: List[str], macs: List[str] = None,
-                  network_configs: List[dict] = None, seed_path: str = None, guest_username: str = "kvmadmin", guest_password: str = None, progress=None) -> None:
+                  network_configs: List[dict] = None, seed_path: str = None, guest_username: str = "kvmadmin", guest_password: str = None, progress=None, guest_hostname: str = None) -> None:
         created = []
         defined = False
         try:
@@ -251,7 +251,7 @@ class VmProvisioner:
                 self.create_empty_disk(extra_path, extra_gb); created.append(extra_path); disks.append(extra_path)
             if network_configs and seed_path:
                 if progress: progress("CLOUD_INIT", "계정 및 네트워크 설정 ISO 생성 중")
-                self.create_cloud_init_seed(seed_path, name, network_configs, guest_username, guest_password); created.append(seed_path)
+                self.create_cloud_init_seed(seed_path, name, network_configs, guest_username, guest_password, guest_hostname=guest_hostname); created.append(seed_path)
             if progress: progress("DEFINE", "libvirt 도메인 등록 중")
             self.libvirt.define_xml(self.domain_xml(name, memory_gb, vcores, disks, bridges, macs, seed_path)); defined = True
             self.libvirt.autostart(name, True)

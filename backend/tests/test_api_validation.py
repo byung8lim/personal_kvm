@@ -31,5 +31,12 @@ class ApiValidationTests(unittest.TestCase):
         with self.assertRaises(ValidationError): ChangePasswordReq(current_password="old", new_password="onlylowercase")
         ChangePasswordReq(current_password="old", new_password="ValidPass123!")
 
+    def test_dns_hostname_is_fixed_at_creation(self):
+        args = {"name": "vm-one", "os_image_id": 1, "guest_password": "ValidPass123!"}
+        self.assertEqual(CreateInstanceReq(**args).effective_hostname, "vm-one")
+        self.assertEqual(CreateInstanceReq(**args, hostname="app-one").effective_hostname, "app-one")
+        with self.assertRaises(ValidationError):
+            CreateInstanceReq(**args, hostname="invalid_name")
+
 
 if __name__ == "__main__": unittest.main()
