@@ -160,6 +160,7 @@ def finalize_failed_creation(db: Session, instance_id: int, operation_uuid: str,
         ip_row.assigned_at = None
         network = db.query(VirtualNetwork).filter(VirtualNetwork.id == ip_row.network_id).with_for_update().one()
         network.assigned_ips = max(0, (network.assigned_ips or 0) - 1)
+    db.query(ManagedNfsMount).filter(ManagedNfsMount.instance_id == instance_id).delete(synchronize_session=False)
     db.query(InstanceNic).filter(InstanceNic.instance_id == instance_id).delete(synchronize_session=False)
     instance.public_ip = None
     instance.private_ip = None
@@ -772,6 +773,7 @@ def instance_action(instance_id: int, action: str, force: bool = False, db: Sess
                 net = db.query(VirtualNetwork).filter(VirtualNetwork.id == ip_row.network_id).first()
                 if net and net.assigned_ips > 0:
                     net.assigned_ips -= 1
+            db.query(ManagedNfsMount).filter(ManagedNfsMount.instance_id == inst.id).delete(synchronize_session=False)
             db.query(InstanceNic).filter(InstanceNic.instance_id == inst.id).delete(synchronize_session=False)
             inst.state = "DELETED"
         finish_operation(op)
