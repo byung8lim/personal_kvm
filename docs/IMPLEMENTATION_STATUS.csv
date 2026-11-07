@@ -1,0 +1,19 @@
+track,feature,implementation_status,verification_status,commit_or_evidence,next_action
+core,Rocky9/10 preflight,existing_source,real_host_not_verified,scripts/preflight_check.sh,run_on_both_OS
+core,KVM installation,existing_source,real_host_not_verified,scripts/install.sh,clean_host_acceptance
+network,NetworkManager bridge setup,existing_source,real_host_not_verified,scripts/setup_networks.sh,network_access_test
+vm,VM create/delete,existing_source,real_host_not_verified,backend/app/main.py,provision_delete_acceptance
+dns,creation-time DNS hostname,implemented,unit_level_reported,7b5e11c,verify_migration_and_UI
+dns,DDNS A/PTR operations,implemented,unit_level_reported,6d0803b,real_named_test
+dns,VM lifecycle DDNS wiring,implemented,integration_not_verified,e38b46e,failure_recovery_test
+dns,Bind9 zone setup script,implemented,integration_not_verified,c1bec65,Rocky9_10_test
+dns,installer opt-in integration,implemented,static_regression_script_added,0efaa68,run_test_and_install
+dns,configuration file permissions,implemented,not_verified,211ff8e,backend_runtime_test
+dns,DNS health check and orphan cleanup,not_implemented,not_tested,requirements,implement_reconciler
+storage,Virtiofs shared mount,not_verified,not_tested,requirements,inspect_and_implement
+storage,scheduled snapshot and backup,not_verified,not_tested,requirements,implement_safe_snapshot_manager
+loadbalancer,Traefik L4 routing,not_verified,not_tested,requirements,inspect_and_implement
+loadbalancer,DNS01 wildcard ACME,not_verified,not_tested,requirements,inspect_and_implement
+deployment,declarative cluster YAML,not_verified,not_tested,requirements,implement_apply_cli
+observability,Prometheus Grafana exporters,not_verified,not_tested,requirements,implement_addon
+docs,Bind9 installation documentation,implemented,not_applicable,863cd60,maintain
