@@ -453,6 +453,35 @@ CURRENT_STAGE="networks"
 echo "[4/7] 4대 가상 네트워크 (virbr0 ~ virbr3) 구성..."
 /opt/personal-kvm/scripts/setup_networks.sh "${PHYS_NIC}" "${HOST_BR_IP}" "${HOST_BR_GW}" /etc/personal-kvm/config.yaml
 
+# Bind9 is opt-in to avoid taking over an existing authoritative DNS service.
+# Run only after network setup and before starting the application.
+if [ "${PKVM_SETUP_BIND9:-0}" = "1" ]; then
+    CURRENT_STAGE="bind9"
+    echo "[DNS] Bind9 TSIG 동적 DNS 설치 및 구성..."
+    DNS_FORWARD="${PKVM_DNS_FORWARD_ZONE:?PKVM_DNS_FORWARD_ZONE must be set}"
+    DNS_REVERSE="${PKVM_DNS_REVERSE_ZONE:?PKVM_DNS_REVERSE_ZONE must be set}"
+    DNS_SERVER="${PKVM_DNS_SERVER_IP:?PKVM_DNS_SERVER_IP must be set}"
+    bash /opt/personal-kvm/scripts/setup_bind9.sh "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_SERVER"
+    python3 - /etc/personal-kvm/config.yaml "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_SERVER" <<'PY_BIND9'
+from pathlib import Path
+import os,sys,tempfile,yaml
+p=Path(sys.argv[1]); forward,reverse,server=sys.argv[2:]
+with p.open(encoding='utf-8') as stream:
+    data=yaml.safe_load(stream)
+data['dns']={'enabled':True,'server':server,'key_file':'/etc/named/pkvm/pkvm-ddns.key',
+             'forward_zone':forward,'reverse_zone':reverse,'ttl':300}
+fd,path=tempfile.mkstemp(dir=str(p.parent),prefix='.config-bind9-',text=True)
+try:
+    with os.fdopen(fd,'w',encoding='utf-8') as stream:
+        yaml.safe_dump(data,stream,allow_unicode=True,sort_keys=False)
+        stream.flush(); os.fsync(stream.fileno())
+    os.chmod(path,0o640)
+    os.replace(path,p)
+finally:
+    if os.path.exists(path): os.unlink(path)
+PY_BIND9
+fi
+
 CURRENT_STAGE="database"
 echo "[5/7] MariaDB 데이터베이스 및 계정 초기화..."
 "${DB_CLI}" -u root <<MYSQL_EOF
