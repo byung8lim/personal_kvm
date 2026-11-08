@@ -499,14 +499,26 @@ CURRENT_STAGE="networks"
 echo "[4/7] 4대 가상 네트워크 (virbr0 ~ virbr3) 구성..."
 /opt/personal-kvm/scripts/setup_networks.sh "${PHYS_NIC}" "${HOST_BR_IP}" "${HOST_BR_GW}" /etc/personal-kvm/config.yaml
 
-# Bind9 is opt-in to avoid taking over an existing authoritative DNS service.
-# Run only after network setup and before starting the application.
-if [ "${PKVM_SETUP_BIND9:-0}" = "1" ]; then
+# A configured dns.enabled=true is an explicit request to provision the local
+# authoritative service. PKVM_SETUP_BIND9 remains available for env-only installs.
+mapfile -t DNS_CONFIG < <(python3 - /etc/personal-kvm/config.yaml <<'PY_DNS_CONFIG'
+import sys,yaml
+with open(sys.argv[1], encoding='utf-8') as stream:
+    dns=(yaml.safe_load(stream) or {}).get('dns') or {}
+print('1' if dns.get('enabled') else '0')
+for key in ('forward_zone','reverse_zone','server'):
+    print(dns.get(key) or '')
+PY_DNS_CONFIG
+)
+if [ "${PKVM_SETUP_BIND9:-${DNS_CONFIG[0]}}" = "1" ]; then
     CURRENT_STAGE="bind9"
     echo "[DNS] Bind9 TSIG 동적 DNS 설치 및 구성..."
-    DNS_FORWARD="${PKVM_DNS_FORWARD_ZONE:?PKVM_DNS_FORWARD_ZONE must be set}"
-    DNS_REVERSE="${PKVM_DNS_REVERSE_ZONE:?PKVM_DNS_REVERSE_ZONE must be set}"
-    DNS_SERVER="${PKVM_DNS_SERVER_IP:?PKVM_DNS_SERVER_IP must be set}"
+    DNS_FORWARD="${PKVM_DNS_FORWARD_ZONE:-${DNS_CONFIG[1]}}"
+    DNS_REVERSE="${PKVM_DNS_REVERSE_ZONE:-${DNS_CONFIG[2]}}"
+    DNS_SERVER="${PKVM_DNS_SERVER_IP:-${DNS_CONFIG[3]}}"
+    [ -n "$DNS_FORWARD" ] && [ -n "$DNS_REVERSE" ] && [ -n "$DNS_SERVER" ] || {
+        echo '[오류] dns.enabled=true이면 server/forward_zone/reverse_zone이 필요합니다.' >&2; exit 1;
+    }
     bash /opt/personal-kvm/scripts/setup_bind9.sh "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_SERVER"
     python3 - /etc/personal-kvm/config.yaml "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_SERVER" <<'PY_BIND9'
 from pathlib import Path
@@ -529,6 +541,38 @@ finally:
     if os.path.exists(path): os.unlink(path)
 PY_BIND9
 fi
+
+CURRENT_STAGE="nfs"
+echo "[NFS] 관리망 공유 볼륨 서버 및 export 구성..."
+mapfile -t NFS_CONFIG < <(python3 - /etc/personal-kvm/config.yaml <<'PY_NFS_CONFIG'
+import sys,yaml
+with open(sys.argv[1], encoding='utf-8') as stream:
+    data=yaml.safe_load(stream) or {}
+print((data.get('nfs') or {}).get('NFS_DIR') or '/data/nfs')
+print(data['networks']['management']['cidr'])
+PY_NFS_CONFIG
+)
+bash /opt/personal-kvm/scripts/setup_nfs.sh "${NFS_CONFIG[0]}" "${NFS_CONFIG[1]}"
+python3 - /etc/personal-kvm/config.yaml "${NFS_CONFIG[0]}" <<'PY_NFS_PERSIST'
+from pathlib import Path
+import os,sys,tempfile,yaml,grp
+p=Path(sys.argv[1]); nfs_dir=sys.argv[2]
+with p.open(encoding='utf-8') as stream: data=yaml.safe_load(stream) or {}
+data['nfs']={'NFS_DIR':nfs_dir}
+fd,tmp=tempfile.mkstemp(dir=str(p.parent),prefix='.config-nfs-',text=True)
+try:
+    with os.fdopen(fd,'w',encoding='utf-8') as stream:
+        yaml.safe_dump(data,stream,allow_unicode=True,sort_keys=False)
+        stream.flush(); os.fsync(stream.fileno())
+    os.chmod(tmp,0o640); os.chown(tmp,0,grp.getgrnam('pkvm').gr_gid); os.replace(tmp,p)
+finally:
+    if os.path.exists(tmp): os.unlink(tmp)
+PY_NFS_PERSIST
+
+CURRENT_STAGE="load-balancers"
+echo "[LB] HAProxy L4 및 Traefik L7 런타임 구성..."
+bash /opt/personal-kvm/scripts/setup_lb.sh haproxy 8404
+bash /opt/personal-kvm/scripts/setup_lb.sh traefik 8443
 
 CURRENT_STAGE="database"
 echo "[5/7] MariaDB 데이터베이스 및 계정 초기화..."

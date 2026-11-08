@@ -2,6 +2,22 @@
 # Explicit opt-in LB service bootstrap, no secret or public listener auto-generation.
 set -euo pipefail
 die(){ echo "[LB 오류] $*" >&2; exit 1; }
+install_traefik_binary() {
+  local version="3.7.17"
+  local archive="traefik_v${version}_linux_amd64.tar.gz"
+  local checksum="a564abd5fc8ee97d838270f188bb94cb3172cc113f4b51aa5e7dd6117eedb393"
+  local work
+  [[ "$(uname -m)" == "x86_64" ]] || die 'Automatic Traefik install currently supports x86_64 only'
+  work="$(mktemp -d /tmp/pkvm-traefik.XXXXXXXX)"
+  trap 'rm -rf "$work"' RETURN
+  curl --fail --location --retry 3 --output "$work/$archive" \
+    "https://github.com/traefik/traefik/releases/download/v${version}/${archive}"
+  printf '%s  %s\n' "$checksum" "$work/$archive" | sha256sum -c -
+  tar -xzf "$work/$archive" -C "$work" traefik
+  install -o root -g root -m 0755 "$work/traefik" /usr/local/bin/traefik
+  rm -rf "$work"
+  trap - RETURN
+}
 [[ $EUID -eq 0 && $# -eq 2 ]] || die 'Usage: sudo setup_lb.sh <traefik|haproxy> <port>'
 SERVICE="$1"; PORT="$2"
 [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( PORT>=1 && PORT<=65534 )) || die 'Invalid port'
@@ -54,6 +70,10 @@ UNIT
   ;;
 traefik)
   TRAEFIK_BIN="$(command -v traefik || true)"
+  if [[ -z "$TRAEFIK_BIN" ]]; then
+    install_traefik_binary
+    TRAEFIK_BIN="$(command -v traefik || true)"
+  fi
   [[ -n "$TRAEFIK_BIN" ]] || die 'Verified Traefik binary must be installed in PATH'
   # All 4 requested strategies are available in Traefik >= 3.4.
   TRAEFIK_VERSION="$($TRAEFIK_BIN version | awk '/^Version:/ {print $2; exit}')"

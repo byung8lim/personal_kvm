@@ -1,4 +1,4 @@
-import os, uuid, psutil, hashlib, threading, logging, time, json
+import os, uuid, psutil, hashlib, threading, logging, time, json, shutil, socket
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request, Body
@@ -213,6 +213,19 @@ def readiness():
         bridge = network.get("bridge_name")
         check_name = f"bridge_{network_name}"
         checks[check_name] = "ok" if bridge and Path("/sys/class/net", bridge).exists() else f"missing: {bridge}"
+    dns = runtime_config().get("dns") or {}
+    if dns.get("enabled"):
+        key_file = Path(dns.get("key_file") or "")
+        try:
+            with socket.create_connection((dns.get("server") or "127.0.0.1", 53), timeout=1):
+                pass
+            checks["bind9"] = "ok" if key_file.is_file() else f"missing: {key_file}"
+        except OSError as exc:
+            checks["bind9"] = f"unavailable: {exc}"
+    nfs_dir = Path((runtime_config().get("nfs") or {}).get("NFS_DIR") or "")
+    checks["nfs"] = "ok" if nfs_dir.is_dir() and Path("/var/lib/nfs/etab").is_file() else "not configured"
+    checks["haproxy"] = "ok" if shutil.which("haproxy") and Path("/etc/systemd/system/pkvm-haproxy.service").is_file() else "not configured"
+    checks["traefik"] = "ok" if shutil.which("traefik") and Path("/etc/personal-kvm/traefik/dynamic").is_dir() else "not configured"
     ready = all(value == "ok" or key == "qemu_path" for key, value in checks.items())
     payload = {"status": "ready" if ready else "not_ready", "version": "0.1.9", "checks": checks}
     return payload if ready else JSONResponse(status_code=503, content=payload)
