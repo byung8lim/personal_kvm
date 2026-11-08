@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
 NETWORK = (ROOT / "scripts/setup_networks.sh").read_text(encoding="utf-8")
+HOST_DNS = (ROOT / "scripts/setup_host_dns.sh").read_text(encoding="utf-8")
 
 def test_network_checkpoint_default_and_manual_override():
     assert 'export PKVM_ALLOW_NONINTERACTIVE_NETWORK="${PKVM_ALLOW_NONINTERACTIVE_NETWORK:-1}"' in INSTALL
@@ -21,3 +22,7 @@ def test_dns_client_before_nameserver_and_network_contract():
 
 def test_install_serialization():
     assert 'flock -n 9' in INSTALL
+
+def test_rocky_10_resolver_update_waits_for_networkmanager():
+    assert 'for _attempt in {1..20}' in HOST_DNS
+    assert 'resolver_applied=1' in HOST_DNS

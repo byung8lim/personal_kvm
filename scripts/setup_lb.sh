@@ -10,8 +10,21 @@ install_traefik_binary() {
   [[ "$(uname -m)" == "x86_64" ]] || die 'Automatic Traefik install currently supports x86_64 only'
   work="$(mktemp -d /tmp/pkvm-traefik.XXXXXXXX)"
   trap 'rm -rf "$work"' RETURN
-  curl --fail --location --retry 3 --output "$work/$archive" \
-    "https://github.com/traefik/traefik/releases/download/v${version}/${archive}"
+  if ! curl --fail --location --retry 5 --retry-all-errors --connect-timeout 15 \
+      --output "$work/$archive" \
+      "https://github.com/traefik/traefik/releases/download/v${version}/${archive}"; then
+    # Some GitHub regional release-download edges return 504 while the Releases
+    # API and its object-storage redirect remain healthy. Resolve the immutable
+    # asset API URL by exact filename, then apply the same pinned checksum.
+    local asset_url
+    asset_url="$(curl --fail --silent --show-error --retry 5 --retry-all-errors \
+      "https://api.github.com/repos/traefik/traefik/releases/tags/v${version}" | \
+      python3 -c 'import json,sys; name=sys.argv[1]; data=json.load(sys.stdin); print(next(x["url"] for x in data["assets"] if x["name"]==name))' "$archive")"
+    [[ "$asset_url" == https://api.github.com/repos/traefik/traefik/releases/assets/* ]] || \
+      die 'Unexpected Traefik release asset URL'
+    curl --fail --location --retry 5 --retry-all-errors --connect-timeout 15 \
+      -H 'Accept: application/octet-stream' --output "$work/$archive" "$asset_url"
+  fi
   printf '%s  %s\n' "$checksum" "$work/$archive" | sha256sum -c -
   tar -xzf "$work/$archive" -C "$work" traefik
   install -o root -g root -m 0755 "$work/traefik" /usr/local/bin/traefik

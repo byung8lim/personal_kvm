@@ -56,7 +56,15 @@ fi
 
 nmcli connection modify "$PROFILE" ipv4.ignore-auto-dns yes ipv4.dns '127.0.0.1 8.8.8.8 1.1.1.1'
 nmcli device reapply "$BRIDGE" >/dev/null
-grep -Eq '^nameserver[[:space:]]+127\.0\.0\.1([[:space:]]|$)' /etc/resolv.conf || \
-    fail '/etc/resolv.conf에 로컬 DNS가 적용되지 않았습니다.'
+# Rocky 10.2 NetworkManager updates resolv.conf asynchronously after reapply.
+resolver_applied=0
+for _attempt in {1..20}; do
+    if grep -Eq '^nameserver[[:space:]]+127\.0\.0\.1([[:space:]]|$)' /etc/resolv.conf; then
+        resolver_applied=1
+        break
+    fi
+    sleep 1
+done
+[[ "$resolver_applied" -eq 1 ]] || fail '/etc/resolv.conf에 로컬 DNS가 적용되지 않았습니다.'
 dns_ok "$ZONE" SOA || fail '호스트 기본 resolver의 관리 zone 조회 실패'
 echo "[Host DNS] $PROFILE/$BRIDGE -> 127.0.0.1 적용 완료"

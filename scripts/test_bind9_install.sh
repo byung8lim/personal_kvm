@@ -9,4 +9,5 @@ grep -Fq 'bash /opt/personal-kvm/scripts/setup_bind9.sh' "$ROOT/scripts/install.
 grep -Fq "CURRENT_STAGE=\"bind9\"" "$ROOT/scripts/install.sh"
 grep -Fq 'named-checkconf -z' "$ROOT/scripts/setup_bind9.sh"
 grep -Fq 'update-policy' "$ROOT/scripts/setup_bind9.sh"
+grep -Fq '기존 Personal KVM split-view 설정 유지' "$ROOT/scripts/setup_bind9.sh"
 printf '[PASS] Bind9 installer syntax and integration checks\n'
