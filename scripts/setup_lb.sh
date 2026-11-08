@@ -60,7 +60,9 @@ HAPROXY
     chmod 0644 /etc/haproxy/pkvm-managed.cfg
   fi
   haproxy -c -f /etc/haproxy/pkvm-managed.cfg || die 'Managed HAProxy configuration invalid'
-  install -d -o root -g root -m 0750 /etc/personal-kvm
+  # The directory contains separately protected secrets, but service accounts
+  # need traverse access to their own subdirectories.
+  install -d -o root -g root -m 0751 /etc/personal-kvm
   [[ -f /etc/personal-kvm/ha-services.json ]] || printf '[]\n' >/etc/personal-kvm/ha-services.json
   chmod 0600 /etc/personal-kvm/ha-services.json
   cat >/etc/systemd/system/pkvm-haproxy.service <<UNIT
@@ -130,6 +132,7 @@ PY
   # Treat port as HTTPS (websecure); HTTP binds to adjacent high port.
   HTTP_PORT=$((PORT+1))
   id -u pkvm-traefik >/dev/null 2>&1 || useradd -r -s /sbin/nologin -d /var/lib/pkvm-traefik pkvm-traefik
+  chmod 0751 /etc/personal-kvm
   install -d -o root -g pkvm-traefik -m 0750 /etc/personal-kvm/traefik
   install -d -o root -g pkvm-traefik -m 0750 /etc/personal-kvm/traefik/dynamic
   cat >/etc/personal-kvm/traefik/traefik.yaml <<YAML

@@ -33,6 +33,21 @@ class DeploymentRegression(unittest.TestCase):
                 publisher.publish(valid, Path(tmp))
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_l7_ingress_forwards_standard_http_to_traefik(self):
+        spec = {"name": "svc", "domain": "web.lab.local", "tls": False,
+                "backends": [{"url": "http://127.0.0.1:8080"}]}
+        rendered = publisher.render_nginx_ingress(spec, {"web": 8445, "websecure": 8444})
+        self.assertIn("listen 0.0.0.0:80;", rendered)
+        self.assertIn("server_name web.lab.local;", rendered)
+        self.assertIn("proxy_pass http://127.0.0.1:8445;", rendered)
+
+    def test_l7_ingress_forwards_standard_https_to_traefik(self):
+        spec = {"name": "svc", "domain": "secure.lab.local", "tls": True,
+                "backends": [{"url": "http://127.0.0.1:8080"}]}
+        rendered = publisher.render_nginx_ingress(spec, {"web": 8445, "websecure": 8444})
+        self.assertIn("listen 0.0.0.0:443 ssl;", rendered)
+        self.assertIn("proxy_pass https://127.0.0.1:8444;", rendered)
+
     def test_install_registers_agent_and_never_prints_password(self):
         script = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
         self.assertIn("systemctl restart pkvm-lb-agent.service", script)
