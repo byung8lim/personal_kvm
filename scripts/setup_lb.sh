@@ -40,13 +40,34 @@ haproxy)
   command -v haproxy >/dev/null || die 'HAProxy binary missing'
   [[ -r /etc/haproxy/haproxy.cfg ]] || die 'HAProxy config missing'
   haproxy -c -f /etc/haproxy/haproxy.cfg || die 'Existing HAProxy configuration invalid'
-  # Managed service starts only after an operator publishes a validated L4 definition.
+  # Keep the managed engine healthy before the first L4 service is published.
+  # The baseline has no public listener; apply_haproxy_services.py atomically
+  # replaces it when an operator creates a validated L4 definition.
+  if [[ ! -f /etc/haproxy/pkvm-managed.cfg ]]; then
+    cat >/etc/haproxy/pkvm-managed.cfg <<'HAPROXY'
+global
+    log stdout format raw local0
+    maxconn 20000
+    stats socket /run/pkvm-haproxy/admin.sock mode 600 level admin
+defaults
+    log global
+    mode tcp
+    option tcplog
+    timeout connect 5s
+    timeout client 60s
+    timeout server 60s
+HAPROXY
+    chmod 0644 /etc/haproxy/pkvm-managed.cfg
+  fi
+  haproxy -c -f /etc/haproxy/pkvm-managed.cfg || die 'Managed HAProxy configuration invalid'
+  install -d -o root -g root -m 0750 /etc/personal-kvm
+  [[ -f /etc/personal-kvm/ha-services.json ]] || printf '[]\n' >/etc/personal-kvm/ha-services.json
+  chmod 0600 /etc/personal-kvm/ha-services.json
   cat >/etc/systemd/system/pkvm-haproxy.service <<UNIT
 [Unit]
 Description=Personal KVM managed HAProxy TCP service
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/etc/haproxy/pkvm-managed.cfg
 [Service]
 Type=notify
 RuntimeDirectory=pkvm-haproxy
@@ -78,8 +99,10 @@ ProtectHome=true
 WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
-  systemctl enable pkvm-haproxy.service
-  systemctl enable pkvm-ha-monitor.service
+  systemctl enable --now pkvm-haproxy.service
+  systemctl enable --now pkvm-ha-monitor.service
+  systemctl is-active --quiet pkvm-haproxy.service || die 'HAProxy did not start'
+  systemctl is-active --quiet pkvm-ha-monitor.service || die 'HAProxy monitor did not start'
   ;;
 traefik)
   if [[ -x /usr/local/bin/traefik ]]; then
