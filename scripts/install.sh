@@ -499,6 +499,26 @@ chmod -R 0755 /opt/personal-kvm/frontend
 
 CURRENT_STAGE="networks"
 echo "[4/7] 4대 가상 네트워크 (virbr0 ~ virbr3) 구성..."
+# Guests must query the local Bind9 authority rather than public resolvers.
+# Use the externally bridged host address because it is reachable from every
+# host-owned libvirt bridge, including networks whose dnsmasq uses no-resolv.
+python3 - /etc/personal-kvm/config.yaml <<'PY_GUEST_DNS'
+from pathlib import Path
+import ipaddress,os,sys,tempfile,yaml,grp
+p=Path(sys.argv[1])
+with p.open(encoding='utf-8') as stream: data=yaml.safe_load(stream) or {}
+client_ip=str(ipaddress.ip_interface(data['networks']['bridged']['host_ip_cidr']).ip)
+data.setdefault('dns',{})['client_server']=client_ip
+for network in data['networks'].values(): network['dns']=client_ip
+fd,tmp=tempfile.mkstemp(dir=str(p.parent),prefix='.config-guest-dns-',text=True)
+try:
+    with os.fdopen(fd,'w',encoding='utf-8') as stream:
+        yaml.safe_dump(data,stream,allow_unicode=True,sort_keys=False)
+        stream.flush(); os.fsync(stream.fileno())
+    os.chmod(tmp,0o640); os.chown(tmp,0,grp.getgrnam('pkvm').gr_gid); os.replace(tmp,p)
+finally:
+    if os.path.exists(tmp): os.unlink(tmp)
+PY_GUEST_DNS
 /opt/personal-kvm/scripts/setup_networks.sh "${PHYS_NIC}" "${HOST_BR_IP}" "${HOST_BR_GW}" /etc/personal-kvm/config.yaml
 
 # A configured dns.enabled=true is an explicit request to provision the local
@@ -508,7 +528,7 @@ import sys,yaml
 with open(sys.argv[1], encoding='utf-8') as stream:
     dns=(yaml.safe_load(stream) or {}).get('dns') or {}
 print('1' if dns.get('enabled') else '0')
-for key in ('forward_zone','reverse_zone','server'):
+for key in ('forward_zone','reverse_zone','server','client_server'):
     print(dns.get(key) or '')
 PY_DNS_CONFIG
 )
@@ -518,18 +538,25 @@ if [ "${PKVM_SETUP_BIND9:-${DNS_CONFIG[0]}}" = "1" ]; then
     DNS_FORWARD="${PKVM_DNS_FORWARD_ZONE:-${DNS_CONFIG[1]}}"
     DNS_REVERSE="${PKVM_DNS_REVERSE_ZONE:-${DNS_CONFIG[2]}}"
     DNS_SERVER="${PKVM_DNS_SERVER_IP:-${DNS_CONFIG[3]}}"
+    DNS_CLIENT_SERVER="${PKVM_DNS_CLIENT_IP:-${DNS_CONFIG[4]}}"
     [ -n "$DNS_FORWARD" ] && [ -n "$DNS_REVERSE" ] && [ -n "$DNS_SERVER" ] || {
         echo '[오류] dns.enabled=true이면 server/forward_zone/reverse_zone이 필요합니다.' >&2; exit 1;
     }
-    bash /opt/personal-kvm/scripts/setup_bind9.sh "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_SERVER"
-    python3 - /etc/personal-kvm/config.yaml "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_SERVER" <<'PY_BIND9'
+    mapfile -t DNS_CLIENT_CIDRS < <(python3 - /etc/personal-kvm/config.yaml <<'PY_DNS_CIDRS'
+import sys,yaml
+with open(sys.argv[1],encoding='utf-8') as stream: data=yaml.safe_load(stream) or {}
+for item in (data.get('networks') or {}).values(): print(item['cidr'])
+PY_DNS_CIDRS
+)
+    bash /opt/personal-kvm/scripts/setup_bind9.sh "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_SERVER" "$DNS_CLIENT_SERVER" "${DNS_CLIENT_CIDRS[@]}"
+    python3 - /etc/personal-kvm/config.yaml "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_SERVER" "$DNS_CLIENT_SERVER" <<'PY_BIND9'
 from pathlib import Path
 import os,sys,tempfile,yaml
-p=Path(sys.argv[1]); forward,reverse,server=sys.argv[2:]
+p=Path(sys.argv[1]); forward,reverse,server,client_server=sys.argv[2:]
 with p.open(encoding='utf-8') as stream:
     data=yaml.safe_load(stream)
 data['dns']={'enabled':True,'server':server,'key_file':'/etc/named/pkvm/pkvm-ddns.key',
-             'forward_zone':forward,'reverse_zone':reverse,'ttl':300}
+             'client_server':client_server,'forward_zone':forward,'reverse_zone':reverse,'ttl':300}
 fd,path=tempfile.mkstemp(dir=str(p.parent),prefix='.config-bind9-',text=True)
 try:
     with os.fdopen(fd,'w',encoding='utf-8') as stream:
