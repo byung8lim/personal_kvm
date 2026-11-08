@@ -72,9 +72,11 @@ traefik)
   TRAEFIK_BIN="$(command -v traefik || true)"
   if [[ -z "$TRAEFIK_BIN" ]]; then
     install_traefik_binary
-    TRAEFIK_BIN="$(command -v traefik || true)"
+    # Non-interactive sudo may omit /usr/local/bin from its secure PATH.
+    # Use the exact verified installation target instead of relying on PATH.
+    TRAEFIK_BIN="/usr/local/bin/traefik"
   fi
-  [[ -n "$TRAEFIK_BIN" ]] || die 'Verified Traefik binary must be installed in PATH'
+  [[ -x "$TRAEFIK_BIN" ]] || die 'Verified Traefik binary is not executable'
   # All 4 requested strategies are available in Traefik >= 3.4.
   TRAEFIK_VERSION="$($TRAEFIK_BIN version | awk '/^Version:/ {print $2; exit}')"
   if ! python3 - "$TRAEFIK_VERSION" <<'PY'
