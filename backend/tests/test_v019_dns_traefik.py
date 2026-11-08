@@ -60,7 +60,7 @@ class TraefikRegression(unittest.TestCase):
 
 class HaproxyThresholdRegression(unittest.TestCase):
     def test_proxy_fall_uses_same_threshold_as_monitor(self):
-        config = render_tcp_service({"name": "bank", "listen_ip": "10.10.50.1",
+        config = render_tcp_service({"name": "bank", "domain": "bank.wbl.int", "listen_ip": "10.10.50.1",
                                      "listen_port": 5432, "failover_threshold": 2,
                                      "backends": [{"host": "10.10.50.11", "port": 5432},
                                                   {"host": "10.10.50.12", "port": 5432,

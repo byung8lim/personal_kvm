@@ -25,6 +25,7 @@ from app.services.haproxy_l4 import render_tcp_service
 from app.services.traefik_l7 import render_yaml as render_l7_yaml
 from app.services.nfs_volumes import create_volume, delete_volume, VolumeError
 from app.services.lb_agent_client import request as lb_agent_request
+from app.services.lb_dns import binding_for as lb_dns_binding, ensure_a as ensure_lb_dns, remove_a_if_owned
 from app.schemas.requests import LoginReq, ChangePasswordReq, CreateInstanceReq, CreateDiskReq, ResizeInstanceReq, DiskActionReq
 from app.core.runtime_config import runtime_config, storage_path
 
@@ -50,6 +51,27 @@ def configured_external_ddns():
         return None
     return Bind9Ddns(dns["server"], dns["key_file"], zone,
                      dns["reverse_zone"], ttl=int(dns.get("ttl", 300)))
+
+def lb_dns_updater(binding):
+    updater = configured_external_ddns() if binding.zone_kind == "external" else configured_ddns()
+    if updater is None:
+        raise DdnsError("DNS updates are disabled")
+    return updater
+
+def lb_domain_in_use(db, spec, exclude_id=None):
+    wanted = lb_dns_binding(spec, runtime_config()).fqdn
+    rows = db.query(ManagedLbService).all()
+    for row in rows:
+        if exclude_id is not None and row.id == exclude_id:
+            continue
+        try:
+            if lb_dns_binding(json.loads(row.specification), runtime_config()).fqdn == wanted:
+                return True
+        except (ValueError, DdnsError, KeyError, TypeError):
+            continue
+    label = wanted.split(".", 1)[0]
+    return db.query(Instance).filter(Instance.dns_hostname == label,
+        Instance.state != "DELETED").first() is not None
 
 app = FastAPI(title="퍼스널 KVM 가상화 서비스 API", version="0.2.3")
 
@@ -256,10 +278,15 @@ def create_lb_service(spec: dict = Body(...), db: Session = Depends(get_db),
         if layer=="L4": rendered=render_tcp_service(spec)
         elif layer=="L7": rendered=render_l7_yaml(spec)
         else: raise ValueError("layer must be L4 or L7")
+        lb_dns_binding(spec, runtime_config())
+    except DdnsError as exc:
+        raise HTTPException(status_code=503,detail="Managed DNS is unavailable") from exc
     except (TypeError,ValueError,KeyError) as exc:
         raise HTTPException(status_code=422,detail=str(exc))
     if db.query(ManagedLbService).filter(ManagedLbService.name==spec["name"]).first():
         raise HTTPException(status_code=409,detail="Load balancer name already exists")
+    if lb_domain_in_use(db, spec):
+        raise HTTPException(status_code=409,detail="Load balancer DNS name already exists")
     record=ManagedLbService(name=spec["name"],layer=layer,
                             specification=json.dumps(spec,ensure_ascii=False),status="DRAFT")
     db.add(record)
@@ -273,7 +300,15 @@ def apply_lb_service(service_id:int,db: Session = Depends(get_db),
     item=db.query(ManagedLbService).filter(ManagedLbService.id==service_id).with_for_update().first()
     if not item: raise HTTPException(status_code=404,detail="Load balancer not found")
     spec=json.loads(item.specification)
+    binding = None
+    updater = None
+    dns_created = False
     try:
+        binding=lb_dns_binding(spec,runtime_config())
+        if lb_domain_in_use(db,spec,exclude_id=item.id):
+            raise ValueError("Load balancer DNS name already exists")
+        updater=lb_dns_updater(binding)
+        dns_created=ensure_lb_dns(binding,updater)
         if item.layer=="L7":
             result=lb_agent_request("apply_l7",service=spec)
         elif item.layer=="L4":
@@ -285,14 +320,17 @@ def apply_lb_service(service_id:int,db: Session = Depends(get_db),
             result=lb_agent_request("apply_l4",services=specs)
         else:
             raise ValueError("Unsupported LB layer")
-    except (RuntimeError,OSError,ValueError,TimeoutError) as exc:
+    except (RuntimeError,OSError,ValueError,TimeoutError,DdnsError) as exc:
+        if dns_created and binding and updater:
+            try: remove_a_if_owned(binding,updater)
+            except Exception: logging.exception("LB DNS rollback failed")
         item.status="ERROR"
         item.error_message=type(exc).__name__
         db.commit()
         raise HTTPException(status_code=503,detail="Deployment failed; inspect LB agent logs")
     item.status="ACTIVE";item.error_message=None
     db.commit()
-    return {"id":item.id,**result}
+    return {"id":item.id,**result,"dns":{"fqdn":binding.fqdn,"address":binding.address}}
 
 @app.post("/api/v1/lb/services/{service_id}/failback")
 def lb_service_failback(service_id:int,db: Session = Depends(get_db),
@@ -313,6 +351,12 @@ def delete_lb_service(service_id: int, db: Session = Depends(get_db),
     if not record: raise HTTPException(status_code=404,detail="Load balancer not found")
     if record.status not in ("DRAFT","ERROR"):
         raise HTTPException(status_code=409,detail="Disable routing before deleting an active LB")
+    if record.status == "ERROR":
+        try:
+            binding=lb_dns_binding(json.loads(record.specification),runtime_config())
+            remove_a_if_owned(binding,lb_dns_updater(binding))
+        except (ValueError,DdnsError,RuntimeError,OSError,TimeoutError) as exc:
+            raise HTTPException(status_code=503,detail="DNS cleanup failed; LB record was retained") from exc
     db.delete(record)
     db.commit()
     return {"status":"deleted"}

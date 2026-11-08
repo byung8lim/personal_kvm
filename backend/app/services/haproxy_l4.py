@@ -30,6 +30,12 @@ def render_tcp_service(spec):
         raise ValueError("Wildcard listening requires explicit operator policy")
     port = _port(spec.get("listen_port"))
     sni_domain = spec.get("sni_domain")
+    service_domain = spec.get("domain") or sni_domain
+    if not service_domain:
+        raise ValueError("L4 service domain is required")
+    _host(service_domain)
+    if spec.get("domain") and sni_domain and spec["domain"].lower() != sni_domain.lower():
+        raise ValueError("domain and sni_domain must match")
     tls_sni = bool(spec.get("tls_sni", False))
     if sni_domain and not tls_sni:
         raise ValueError("Plain TCP cannot route by domain without tls_sni=True")

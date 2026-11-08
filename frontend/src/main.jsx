@@ -37,11 +37,12 @@ function App(){const[token,setToken]=React.useState(localStorage.getItem('pkvm_t
     if(!name)return;
     let spec={name,layer};
     if(layer==='L4'){
+      const domain=prompt('서비스 도메인 (예: db.wbl.int)');
       const listen_ip=prompt('리스너 IP (관리자 승인된 IP)','10.10.70.1');
       const listen_port=Number(prompt('리스너 TCP 포트','5432'));
       const host=prompt('Primary 백엔드 호스트 (IP 또는 Private FQDN)');
       const port=Number(prompt('백엔드 TCP 포트','5432'));
-      if(!listen_ip||!host)return;
+      if(!domain||!listen_ip||!host)return;
       const algorithm=prompt('L4 알고리즘: roundrobin / leastconn / source','roundrobin');
       if(!['roundrobin','leastconn','source'].includes(algorithm)){setError('지원하지 않는 L4 알고리즘입니다.');return}
       const backup=prompt('Standby 백엔드 호스트 (없으면 빈칸)','');
@@ -53,7 +54,7 @@ function App(){const[token,setToken]=React.useState(localStorage.getItem('pkvm_t
         if(!Number.isInteger(backupPort)||backupPort<1||backupPort>65535||!Number.isInteger(failover_threshold)||failover_threshold<1||failover_threshold>20){setError('포트나 Failover 임계값이 올바르지 않습니다.');return}
         backends.push({host:backup,port:backupPort,standby:true});
       }
-      spec={...spec,listen_ip,listen_port,algorithm,failover_threshold,backends};
+      spec={...spec,domain,listen_ip,listen_port,algorithm,failover_threshold,backends};
     }else{
       const domain=prompt('서비스 도메인');
       const path_prefix=prompt('경로 prefix','/');
