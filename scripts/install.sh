@@ -60,6 +60,8 @@ require_project_file "database/schema.sql"
 require_project_file "templates/grub_default.tpl"
 require_project_file "scripts/customize_guest.sh"
 require_project_file "scripts/setup_networks.sh"
+require_project_file "scripts/setup_host_dns.sh"
+require_project_file "scripts/configure_dns_endpoints.py"
 require_project_file "scripts/ensure_networks.sh"
 require_project_file "scripts/renew_tls.sh"
 require_project_file "scripts/preflight_check.sh"
@@ -569,26 +571,10 @@ echo "[4/7] 4대 가상 네트워크 (virbr0 ~ virbr3) 구성..."
 if [[ -n "${SSH_CONNECTION:-}" ]]; then
     echo "[주의] SSH 세션에서 브리지를 자동 전환합니다. NetworkManager 체크포인트가 실패 시 원상 복구합니다."
 fi
-# Guests must query the local Bind9 authority rather than public resolvers.
-# Use the externally bridged host address because it is reachable from every
-# host-owned libvirt bridge, including networks whose dnsmasq uses no-resolv.
-python3 - /etc/personal-kvm/config.yaml <<'PY_GUEST_DNS'
-from pathlib import Path
-import ipaddress,os,sys,tempfile,yaml,grp
-p=Path(sys.argv[1])
-with p.open(encoding='utf-8') as stream: data=yaml.safe_load(stream) or {}
-client_ip=str(ipaddress.ip_interface(data['networks']['bridged']['host_ip_cidr']).ip)
-data.setdefault('dns',{})['client_server']=client_ip
-for network in data['networks'].values(): network['dns']=client_ip
-fd,tmp=tempfile.mkstemp(dir=str(p.parent),prefix='.config-guest-dns-',text=True)
-try:
-    with os.fdopen(fd,'w',encoding='utf-8') as stream:
-        yaml.safe_dump(data,stream,allow_unicode=True,sort_keys=False)
-        stream.flush(); os.fsync(stream.fileno())
-    os.chmod(tmp,0o640); os.chown(tmp,0,grp.getgrnam('pkvm').gr_gid); os.replace(tmp,p)
-finally:
-    if os.path.exists(tmp): os.unlink(tmp)
-PY_GUEST_DNS
+# Guests query Bind9 through the host address on their own attached bridge.
+# Internal networks deliberately have no default gateway, so a single public
+# address is not reachable from every guest.
+mapfile -t DNS_LISTEN_IPS < <(python3 /opt/personal-kvm/scripts/configure_dns_endpoints.py /etc/personal-kvm/config.yaml)
 echo "[네트워크] 체크포인트 자동 승인=${PKVM_ALLOW_NONINTERACTIVE_NETWORK}"
 /opt/personal-kvm/scripts/setup_networks.sh "${PHYS_NIC}" "${HOST_BR_IP}" "${HOST_BR_GW}" /etc/personal-kvm/config.yaml
 
@@ -622,13 +608,18 @@ PY_DNS_CIDRS
 )
     bash /opt/personal-kvm/scripts/setup_bind9.sh "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_ZONE_NS" "$DNS_CLIENT_SERVER" "${DNS_CLIENT_CIDRS[@]}"
     if [ -n "${PKVM_PRIVATE_DOMAIN:-}" ] && [ -n "${PKVM_EXTERNAL_DOMAIN:-}" ]; then
+        SPLIT_DNS_ARGS=(
+            --private "$PKVM_PRIVATE_DOMAIN" --external "$PKVM_EXTERNAL_DOMAIN"
+            --reverse "$DNS_REVERSE" --server "$DNS_ZONE_NS"
+            --public "${PKVM_PUBLIC_CIDR}"
+            --nat "$(python3 -c 'import yaml; print(yaml.safe_load(open("/etc/personal-kvm/config.yaml"))["networks"]["nat"]["cidr"])')"
+            --internal "${PKVM_INTERNAL_CIDR}" --management "${PKVM_MGMT_CIDR}"
+        )
+        for DNS_LISTEN_IP in "${DNS_LISTEN_IPS[@]}"; do
+            SPLIT_DNS_ARGS+=(--listen "$DNS_LISTEN_IP")
+        done
         python3 /opt/personal-kvm/scripts/setup_split_dns.py \
-            --private "$PKVM_PRIVATE_DOMAIN" --external "$PKVM_EXTERNAL_DOMAIN" \
-            --reverse "$DNS_REVERSE" --server "$DNS_ZONE_NS" \
-            --public "${PKVM_PUBLIC_CIDR}" \
-            --nat "$(python3 -c 'import yaml; print(yaml.safe_load(open("/etc/personal-kvm/config.yaml"))["networks"]["nat"]["cidr"])')" \
-            --internal "${PKVM_INTERNAL_CIDR}" --management "${PKVM_MGMT_CIDR}" \
-            --listen "$DNS_CLIENT_SERVER" --apply
+            "${SPLIT_DNS_ARGS[@]}" --apply
     fi
     python3 - /etc/personal-kvm/config.yaml "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_SERVER" "$DNS_CLIENT_SERVER" <<'PY_BIND9'
 from pathlib import Path
@@ -654,6 +645,7 @@ try:
 finally:
     if os.path.exists(path): os.unlink(path)
 PY_BIND9
+    bash /opt/personal-kvm/scripts/setup_host_dns.sh /etc/personal-kvm/config.yaml
 fi
 
 CURRENT_STAGE="nfs"

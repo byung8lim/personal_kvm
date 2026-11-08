@@ -14,6 +14,10 @@ def test_network_checkpoint_default_and_manual_override():
 def test_dns_client_before_nameserver_and_network_contract():
     assert INSTALL.index('DNS_CLIENT_SERVER="${PKVM_DNS_CLIENT_IP:-${DNS_CONFIG[4]}}"') < INSTALL.index('DNS_ZONE_NS="${PKVM_DNS_SERVER_IP:-${DNS_CLIENT_SERVER:-${DNS_CONFIG[3]}}}"')
     assert 'host.ip not in public' in INSTALL
+    assert 'configure_dns_endpoints.py /etc/personal-kvm/config.yaml' in INSTALL
+    assert 'DNS_LISTEN_IPS' in INSTALL
+    assert 'SPLIT_DNS_ARGS+=(--listen "$DNS_LISTEN_IP")' in INSTALL
+    assert 'setup_host_dns.sh' in INSTALL
 
 def test_install_serialization():
     assert 'flock -n 9' in INSTALL
