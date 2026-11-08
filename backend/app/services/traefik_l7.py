@@ -1,6 +1,8 @@
 """File-provider Traefik HTTP routing configuration with 4 algorithms, healthcheck, and request preservation."""
 import re
+import shutil
 import subprocess
+from pathlib import Path
 import yaml
 
 HOST = re.compile(r"^(?=.{1,253}$)[a-zA-Z0-9]+(?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$")
@@ -11,7 +13,12 @@ MIN_STRATEGY_VERSION = (3, 4)
 
 def verify_traefik_version(*, executor=subprocess.run):
     """Reject unverified/older Traefik installations before publishing routes."""
-    result = executor(["traefik", "version"], text=True, capture_output=True,
+    binary = shutil.which("traefik")
+    if not binary and Path("/usr/local/bin/traefik").is_file():
+        binary = "/usr/local/bin/traefik"
+    if not binary:
+        raise RuntimeError("Traefik binary not found")
+    result = executor([binary, "version"], text=True, capture_output=True,
                       timeout=8, check=False)
     if result.returncode:
         raise RuntimeError("Cannot determine Traefik version")
