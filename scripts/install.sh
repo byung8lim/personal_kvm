@@ -1,5 +1,5 @@
 #!/bin/bash
-# scripts/install.sh : 퍼스널 KVM 가상화 서비스 v0.1.9 설치
+# scripts/install.sh : 퍼스널 KVM 가상화 서비스 v0.2.3 설치
 set -euo pipefail
 
 if [ "${EUID}" -ne 0 ]; then
@@ -8,6 +8,14 @@ if [ "${EUID}" -ne 0 ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Install contract: one-shot network setup via NetworkManager rollback checkpoint.
+# Explicit PKVM_ALLOW_NONINTERACTIVE_NETWORK=0 restores manual confirmation.
+export PKVM_ALLOW_NONINTERACTIVE_NETWORK="${PKVM_ALLOW_NONINTERACTIVE_NETWORK:-1}"
+exec 9>/run/personal-kvm-install.lock
+if ! flock -n 9; then
+    echo "[오류] 다른 Personal KVM 설치가 진행 중입니다." >&2
+    exit 1
+fi
 PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
 # Strict, read-only CPU/OS checks run before any host state change.
 bash "${SCRIPT_DIR}/preflight_check.sh"
@@ -81,7 +89,7 @@ HOST_BR_GW="${PKVM_HOST_BR_GW:-$(ip route | awk '/default/ && !found {print $3; 
 HOST_BR_GW="${HOST_BR_GW:-192.168.0.1}"
 
 echo "=================================================================="
-echo " 퍼스널 KVM 가상화 서비스 v0.1.9 설치 시작 (Rocky Linux 9.x / 10.x)"
+echo " 퍼스널 KVM 가상화 서비스 v0.2.3 설치 시작 (Rocky Linux 9.x / 10.x)"
 echo "=================================================================="
 
 INSTALL_STATE_DIR="/var/lib/personal-kvm/install-state"
@@ -436,6 +444,13 @@ PY_COMPUTE_DNS
 fi
 
 if [ -n "${PKVM_PUBLIC_CIDR:-}" ]; then
+    python3 - "$HOST_BR_IP" "$PKVM_PUBLIC_CIDR" <<'PY_PUBLIC_CIDR'
+import ipaddress,sys
+host=ipaddress.ip_interface(sys.argv[1])
+public=ipaddress.ip_network(sys.argv[2],strict=True)
+if host.ip not in public:
+    raise SystemExit(f'[오류] compute.yaml network.public={public} 과 실제 호스트 IP={host.ip} 가 일치하지 않습니다. compute.yaml 수정 후 재실행하세요.')
+PY_PUBLIC_CIDR
     python3 - /etc/personal-kvm/config.yaml "$PKVM_PUBLIC_CIDR" "$PKVM_NAT_CIDR" "$PKVM_INTERNAL_CIDR" "$PKVM_MGMT_CIDR" "$PKVM_IP_ALLOCATION_STRATEGY" <<'PY_COMPUTE_NETWORKS'
 from pathlib import Path
 import ipaddress,sys,yaml
@@ -551,6 +566,9 @@ chmod -R 0755 /opt/personal-kvm/frontend
 
 CURRENT_STAGE="networks"
 echo "[4/7] 4대 가상 네트워크 (virbr0 ~ virbr3) 구성..."
+if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    echo "[주의] SSH 세션에서 브리지를 자동 전환합니다. NetworkManager 체크포인트가 실패 시 원상 복구합니다."
+fi
 # Guests must query the local Bind9 authority rather than public resolvers.
 # Use the externally bridged host address because it is reachable from every
 # host-owned libvirt bridge, including networks whose dnsmasq uses no-resolv.
@@ -571,6 +589,7 @@ try:
 finally:
     if os.path.exists(tmp): os.unlink(tmp)
 PY_GUEST_DNS
+echo "[네트워크] 체크포인트 자동 승인=${PKVM_ALLOW_NONINTERACTIVE_NETWORK}"
 /opt/personal-kvm/scripts/setup_networks.sh "${PHYS_NIC}" "${HOST_BR_IP}" "${HOST_BR_GW}" /etc/personal-kvm/config.yaml
 
 # A configured dns.enabled=true is an explicit request to provision the local
@@ -590,8 +609,8 @@ if [ "${PKVM_SETUP_BIND9:-${DNS_CONFIG[0]}}" = "1" ]; then
     DNS_FORWARD="${PKVM_DNS_FORWARD_ZONE:-${DNS_CONFIG[1]}}"
     DNS_REVERSE="${PKVM_DNS_REVERSE_ZONE:-${DNS_CONFIG[2]}}"
     DNS_SERVER="${DNS_CONFIG[3]}"
-    DNS_ZONE_NS="${PKVM_DNS_SERVER_IP:-${DNS_CLIENT_SERVER:-${DNS_CONFIG[3]}}}"
     DNS_CLIENT_SERVER="${PKVM_DNS_CLIENT_IP:-${DNS_CONFIG[4]}}"
+    DNS_ZONE_NS="${PKVM_DNS_SERVER_IP:-${DNS_CLIENT_SERVER:-${DNS_CONFIG[3]}}}"
     [ -n "$DNS_FORWARD" ] && [ -n "$DNS_REVERSE" ] && [ -n "$DNS_SERVER" ] || {
         echo '[오류] dns.enabled=true이면 server/forward_zone/reverse_zone이 필요합니다.' >&2; exit 1;
     }
@@ -910,7 +929,7 @@ fi
 
 HOST_IP="$(hostname -I | awk '{print $1}')"
 cat > /etc/personal-kvm/install-summary <<EOF
-Personal KVM v0.1.9
+Personal KVM v0.2.3
 Console: https://${HOST_IP}/
 Admin user: ${ADMIN_USER}
 Password file: /etc/personal-kvm/.initial_admin_password
@@ -918,7 +937,7 @@ Installed: $(date --iso-8601=seconds)
 EOF
 chmod 0600 /etc/personal-kvm/install-summary
 echo "=================================================================="
-echo " [설치 완료] 퍼스널 KVM 가상화 서비스 v0.1.9 정상 구동 중!"
+echo " [설치 완료] 퍼스널 KVM 가상화 서비스 v0.2.3 정상 구동 중!"
 echo " - 관리 콘솔           : https://${HOST_IP}/"
 echo " - HTTP 80/8080 요청은 HTTPS로 전환됩니다."
 echo " - 백엔드 8000 포트는 127.0.0.1에서만 수신합니다."

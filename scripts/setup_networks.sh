@@ -110,7 +110,7 @@ if [[ "$APPLY_BRIDGE" -eq 1 ]]; then
     ip -o -4 addr show dev "$BR_BRIDGE" | grep -Fq "$HOST_BR_IP" || die '브리지 IP 확인 실패'
     ip -4 route get "$HOST_BR_GW" | grep -Fq "dev $BR_BRIDGE" || die '게이트웨이 라우팅 검증 실패'
     [[ -z "$(ip -o -4 addr show dev "$PHYS_NIC")" ]] || die '물리 NIC에 기존 IP가 남아 있습니다.'
-    log '새 브리지 링크/주소/라우트 확인 완료. 원격 운영자의 확정 승인이 필요합니다.'
+    log '새 브리지 링크/주소/라우트 확인 완료. 체크포인트 승인 단계로 이동합니다.'
     exit 0
 fi
 
@@ -148,7 +148,7 @@ else
     # nmcli checks out a snapshot, executes a child, then asks for confirmation.
     # Loss of SSH / no explicit confirmation causes a timed rollback.
     log "${PHYS_NIC} -> ${BR_BRIDGE} 전환 예정 (최대 180초 내 승인 없으면 자동 복구)"
-    log '승인 질문에 Yes를 입력해야만 연결 변경이 확정됩니다.'
+    log '체크포인트 검증 성공 시 자동 승인합니다. 실패 시 원상 복구됩니다.'
     CHECKPOINT_COMMAND=(nmcli device checkpoint --timeout 180 --
         "$0" --apply-bridge "$PHYS_NIC" "$HOST_BR_IP" "$HOST_BR_GW" "$CONFIG_YAML")
     if noninteractive_network_allowed; then
