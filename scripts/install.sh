@@ -630,6 +630,12 @@ systemctl daemon-reload
 systemctl enable pkvm-backend.service
 systemctl enable pkvm-lb-agent.service
 systemctl restart pkvm-lb-agent.service
+for _ in $(seq 1 40); do
+    if systemctl is-active --quiet pkvm-lb-agent.service && [ -S /run/pkvm-lb-agent/control.sock ]; then
+        break
+    fi
+    sleep 0.25
+done
 if ! systemctl is-active --quiet pkvm-lb-agent.service || [ ! -S /run/pkvm-lb-agent/control.sock ]; then
     echo '[오류] LB Agent 기동 또는 보호된 UNIX 소켓 생성 실패' >&2
     journalctl -u pkvm-lb-agent.service -n 50 --no-pager >&2 || true
