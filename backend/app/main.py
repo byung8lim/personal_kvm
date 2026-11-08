@@ -51,7 +51,7 @@ def configured_external_ddns():
     return Bind9Ddns(dns["server"], dns["key_file"], zone,
                      dns["reverse_zone"], ttl=int(dns.get("ttl", 300)))
 
-app = FastAPI(title="퍼스널 KVM 가상화 서비스 API", version="0.1.9")
+app = FastAPI(title="퍼스널 KVM 가상화 서비스 API", version="0.2.3")
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(_request: Request, exc: RequestValidationError):
@@ -194,7 +194,7 @@ def remove_managed_disk_file(file_path: str) -> None:
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "0.1.9"}
+    return {"status": "ok", "version": "0.2.3"}
 
 @app.get("/api/health/ready")
 def readiness():
@@ -239,7 +239,7 @@ def readiness():
         and Path("/etc/systemd/system/pkvm-traefik.service").is_file()
     ) else "not configured"
     ready = all(value == "ok" or key == "qemu_path" for key, value in checks.items())
-    payload = {"status": "ready" if ready else "not_ready", "version": "0.1.9", "checks": checks}
+    payload = {"status": "ready" if ready else "not_ready", "version": "0.2.3", "checks": checks}
     return payload if ready else JSONResponse(status_code=503, content=payload)
 
 @app.get("/api/v1/lb/services")

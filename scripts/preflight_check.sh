@@ -31,8 +31,8 @@ if ! has_flag vmx && ! has_flag svm; then
     failures=$((failures + 1))
 fi
 if [[ "$major" == 10 && "$(uname -m)" == x86_64 ]]; then
-    # x86-64-v3 also requires x86-64-v2 baseline features; AVX requires OSXSAVE.
-    for required in avx avx2 bmi1 bmi2 fma movbe f16c xsave osxsave lzcnt sse3 ssse3 sse4_1 sse4_2 popcnt cx16 lahf_lm; do
+    # Linux may not expose a standalone osxsave flag; AVX/AVX2 are kernel-gated.\n    # Keep the kernel-exposed XSAVE and x86-64-v3 instructions checks.
+    for required in avx avx2 bmi1 bmi2 fma movbe f16c xsave lzcnt sse3 ssse3 sse4_1 sse4_2 popcnt cx16 lahf_lm; do
         # Linux reports SSE3 as pni, and BMI1 as bmi1 or bmi.
         match="$required"
         [[ "$required" == sse3 ]] && match=pni
