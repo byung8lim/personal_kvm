@@ -698,7 +698,8 @@ systemctl restart nginx
 
 BACKEND_READY=0
 for attempt in $(seq 1 30); do
-    if curl --fail --silent http://127.0.0.1:8000/api/health/ready >/dev/null 2>&1; then
+    if curl --fail --silent --connect-timeout 1 --max-time 3 \
+        http://127.0.0.1:8000/api/health/ready >/dev/null 2>&1; then
         BACKEND_READY=1
         break
     fi

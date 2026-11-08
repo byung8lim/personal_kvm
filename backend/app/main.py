@@ -225,7 +225,11 @@ def readiness():
     nfs_dir = Path((runtime_config().get("nfs") or {}).get("NFS_DIR") or "")
     checks["nfs"] = "ok" if nfs_dir.is_dir() and Path("/var/lib/nfs/etab").is_file() else "not configured"
     checks["haproxy"] = "ok" if shutil.which("haproxy") and Path("/etc/systemd/system/pkvm-haproxy.service").is_file() else "not configured"
-    checks["traefik"] = "ok" if shutil.which("traefik") and Path("/etc/personal-kvm/traefik/dynamic").is_dir() else "not configured"
+    traefik_binary = shutil.which("traefik") or "/usr/local/bin/traefik"
+    checks["traefik"] = "ok" if (
+        os.access(traefik_binary, os.X_OK)
+        and Path("/etc/systemd/system/pkvm-traefik.service").is_file()
+    ) else "not configured"
     ready = all(value == "ok" or key == "qemu_path" for key, value in checks.items())
     payload = {"status": "ready" if ready else "not_ready", "version": "0.1.9", "checks": checks}
     return payload if ready else JSONResponse(status_code=503, content=payload)

@@ -69,7 +69,11 @@ UNIT
   systemctl enable pkvm-ha-monitor.service
   ;;
 traefik)
-  TRAEFIK_BIN="$(command -v traefik || true)"
+  if [[ -x /usr/local/bin/traefik ]]; then
+    TRAEFIK_BIN="/usr/local/bin/traefik"
+  else
+    TRAEFIK_BIN="$(command -v traefik || true)"
+  fi
   if [[ -z "$TRAEFIK_BIN" ]]; then
     install_traefik_binary
     # Non-interactive sudo may omit /usr/local/bin from its secure PATH.
