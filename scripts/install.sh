@@ -59,7 +59,9 @@ require_project_file "config/config.yaml"
 
 ADMIN_USER="${PKVM_ADMIN_USER:-admin}"
 ADMIN_PASS="${PKVM_ADMIN_PASS:-}"
-DEFAULT_ROUTE_IFACE="$(ip route | awk '/default/ {print $5; exit}')"
+# Consume the complete producer output: with `set -o pipefail`, an early awk
+# exit can give `ip` SIGPIPE and make an otherwise successful install stop.
+DEFAULT_ROUTE_IFACE="$(ip route | awk '/default/ && !found {print $5; found=1}')"
 detect_physical_nic() {
     local route_iface="$1" port_path
     if [ -n "${route_iface}" ] && [ -d "/sys/class/net/${route_iface}/brif" ]; then
@@ -73,9 +75,9 @@ detect_physical_nic() {
 }
 PHYS_NIC="${PKVM_PHYS_NIC:-$(detect_physical_nic "${DEFAULT_ROUTE_IFACE}")}"
 PHYS_NIC="${PHYS_NIC:-enp1s0}"
-HOST_BR_IP="${PKVM_HOST_BR_IP:-$(ip -4 -o addr show dev "${DEFAULT_ROUTE_IFACE:-${PHYS_NIC}}" 2>/dev/null | awk '{print $4; exit}')}"
+HOST_BR_IP="${PKVM_HOST_BR_IP:-$(ip -4 -o addr show dev "${DEFAULT_ROUTE_IFACE:-${PHYS_NIC}}" 2>/dev/null | awk 'NF && !found {print $4; found=1}')}"
 HOST_BR_IP="${HOST_BR_IP:-192.168.0.40/24}"
-HOST_BR_GW="${PKVM_HOST_BR_GW:-$(ip route | awk '/default/ {print $3; exit}')}"
+HOST_BR_GW="${PKVM_HOST_BR_GW:-$(ip route | awk '/default/ && !found {print $3; found=1}')}"
 HOST_BR_GW="${HOST_BR_GW:-192.168.0.1}"
 
 echo "=================================================================="
