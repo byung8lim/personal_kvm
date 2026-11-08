@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+import yaml
 
 from unittest.mock import patch
 
@@ -43,8 +44,12 @@ class VmProvisionerTests(unittest.TestCase):
             key_path.write_text("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDiagnostic test@pkvm\n", encoding="utf-8")
             VmProvisioner(FakeLibvirt(), emulator_path="/usr/bin/qemu-system-x86_64",
                           ssh_public_key_path=str(key_path)).create_cloud_init_seed(
-                destination, "vm-seed", [{"mac": "52:54:00:00:00:01", "address": "10.0.0.2/24",
-                                           "gateway": "10.0.0.1", "default": True}],
+                destination, "vm-seed", [
+                    {"mac": "52:54:00:00:00:01", "address": "10.10.50.2/24",
+                     "gateway": "10.10.50.1", "dns": "10.10.50.1", "search": ["wbl.com"], "default": True},
+                    {"mac": "52:54:00:00:00:02", "address": "10.10.60.2/24",
+                     "dns": "10.10.60.1", "search": ["wbl.int", "wbl.com"], "default": False},
+                ],
                 "kvmadmin", "StrongPass123!"
             )
             command = run.call_args.args[0]
@@ -56,6 +61,10 @@ class VmProvisionerTests(unittest.TestCase):
             self.assertIn("ssh-rsa AAAAB3", captured["user_data"])
             self.assertIn("to: 0.0.0.0/0", captured["network_config"])
             self.assertNotIn("to: default", captured["network_config"])
+            network = yaml.safe_load(captured["network_config"])
+            self.assertEqual(network["ethernets"]["eth0"]["nameservers"]["addresses"], ["10.10.50.1"])
+            self.assertEqual(network["ethernets"]["eth0"]["nameservers"]["search"], ["wbl.com", "wbl.int"])
+            self.assertNotIn("nameservers", network["ethernets"]["eth1"])
 
     def test_cloud_init_seed_uses_xorriso_when_other_iso_tools_missing(self):
         completed = type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()

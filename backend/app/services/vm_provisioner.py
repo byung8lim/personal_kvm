@@ -146,6 +146,17 @@ class VmProvisioner:
             (folder_path / "user-data").write_text("#cloud-config\n" + yaml.safe_dump(user_config, allow_unicode=True, sort_keys=False), encoding="utf-8")
             ethernets = {}
             default_route_added = False
+            # NetworkManager normally publishes DNS from the default-route
+            # connection. Give that connection one reachable resolver and the
+            # union of managed search domains; advertising DNS independently
+            # on every NIC makes resolver priority dependent on activation order.
+            default_resolver = next(
+                (str(net["dns"]) for net in networks if net.get("default") and net.get("dns")),
+                None,
+            )
+            managed_search = list(dict.fromkeys(
+                domain for net in networks for domain in (net.get("search") or []) if domain
+            ))
             for index, net in enumerate(networks):
                 iface = f"eth{index}"
                 item = {"match": {"macaddress": net["mac"].lower()},
@@ -155,10 +166,10 @@ class VmProvisioner:
                     # shorthand `default` here; it expects a CIDR network.
                     item["routes"] = [{"to": "0.0.0.0/0", "via": net["gateway"]}]
                     default_route_added = True
-                if net.get("dns"):
-                    item["nameservers"] = {"addresses": [str(net["dns"])]}
-                    if net.get("search"):
-                        item["nameservers"]["search"] = list(net["search"])
+                if net.get("default") and default_resolver:
+                    item["nameservers"] = {"addresses": [default_resolver]}
+                    if managed_search:
+                        item["nameservers"]["search"] = managed_search
                 ethernets[iface] = item
             network_path = folder_path / "network-config"
             network_path.write_text(yaml.safe_dump({"version": 2, "ethernets": ethernets}, sort_keys=False), encoding="utf-8")
