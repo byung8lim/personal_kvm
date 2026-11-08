@@ -5,7 +5,7 @@ import ipaddress
 import re
 import shlex
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -35,7 +35,7 @@ def validate(data):
         raise ValueError("services entries must be booleans")
     network = require_mapping(cfg.get("network"), "network")
     subnets = {}
-    for key in ("public", "internal", "management"):
+    for key in ("public", "nat", "internal", "management"):
         subnets[key] = ipaddress.ip_network(network[key], strict=True)
         if subnets[key].version != 4:
             raise ValueError(f"network.{key}: IPv4 required")
@@ -64,7 +64,8 @@ def validate(data):
     if service["nfs"]:
         nfs = require_mapping(cfg.get("nfs"), "nfs")
         path = nfs.get("NFS_DIR")
-        if not isinstance(path, str) or not Path(path).is_absolute() or Path(path).resolve() in (Path("/"), Path("/etc"), Path("/var")):
+        posix_path = PurePosixPath(path) if isinstance(path, str) else None
+        if not posix_path or not posix_path.is_absolute() or posix_path in (PurePosixPath("/"), PurePosixPath("/etc"), PurePosixPath("/var")):
             raise ValueError("nfs.NFS_DIR must be a dedicated absolute directory")
     for key in ("traefik", "haproxy"):
         if service[key]:
@@ -85,10 +86,18 @@ def validate(data):
     ):
         raise ValueError("traefik/haproxy listener ports conflict")
     values = {"PKVM_SETUP_BIND9": int(service["bind9"]),
+              "PKVM_PUBLIC_CIDR": str(subnets["public"]),
+              "PKVM_NAT_CIDR": str(subnets["nat"]),
               "PKVM_INTERNAL_CIDR": str(subnets["internal"]),
               "PKVM_MGMT_CIDR": str(subnets["management"])}
+    ipam = require_mapping(cfg.get("ipam", {}), "ipam")
+    strategy = ipam.get("allocation_strategy", "RANDOM")
+    if strategy not in ("RANDOM", "SERIAL"):
+        raise ValueError("ipam.allocation_strategy must be RANDOM or SERIAL")
+    values["PKVM_IP_ALLOCATION_STRATEGY"] = strategy
     if service["bind9"]:
         values["PKVM_EXTERNAL_DOMAIN"] = external
+        values["PKVM_PRIVATE_DOMAIN"] = private
         values.update(PKVM_DNS_FORWARD_ZONE=private,
                       PKVM_DNS_REVERSE_ZONE=reverse,
                       PKVM_DNS_SERVER_IP=str(ip))

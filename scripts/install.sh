@@ -383,6 +383,14 @@ fi
 
 CURRENT_STAGE="configuration"
 echo "[3/7] 스토리지 풀 디렉터리 및 /etc/personal-kvm/.env 환경설정 배포..."
+# compute.yaml is the authoritative installation contract. Historically only
+# compute_install.sh read it, allowing install.sh to deploy the sample
+# config/config.yaml (including kvm.test). Normalize both entry points here.
+COMPUTE_SPEC="${PKVM_COMPUTE_CONFIG:-${PROJECT_ROOT}/compute.yaml}"
+if [ -r "$COMPUTE_SPEC" ]; then
+    COMPUTE_EXPORTS="$(python3 "${PROJECT_ROOT}/scripts/validate_compute.py" "$COMPUTE_SPEC")"
+    eval "$COMPUTE_EXPORTS"
+fi
 mkdir -p /data/images /data/instances /data2/disks
 chmod 0755 /data /data2
 chown -R pkvm:kvm /data/images /data/instances /data2/disks
@@ -411,6 +419,50 @@ bridged["gateway"] = gateway
 with open(path, "w", encoding="utf-8") as handle:
     yaml.safe_dump(config, handle, allow_unicode=True, sort_keys=False)
 PY
+
+if [ -n "${PKVM_PRIVATE_DOMAIN:-}" ] && [ -n "${PKVM_EXTERNAL_DOMAIN:-}" ]; then
+    python3 - /etc/personal-kvm/config.yaml "$PKVM_PRIVATE_DOMAIN" "$PKVM_EXTERNAL_DOMAIN" "$PKVM_DNS_REVERSE_ZONE" <<'PY_COMPUTE_DNS'
+from pathlib import Path
+import sys,yaml
+p=Path(sys.argv[1]); private,external,reverse=sys.argv[2:]
+with p.open(encoding='utf-8') as stream: data=yaml.safe_load(stream) or {}
+dns=data.setdefault('dns',{})
+dns.update(enabled=True,server='127.0.0.1',key_file='/etc/named/pkvm/pkvm-ddns.key',
+           forward_zone=private,private_domain=private,external_domain=external,
+           reverse_zone=reverse,ttl=300)
+with p.open('w',encoding='utf-8') as stream:
+    yaml.safe_dump(data,stream,allow_unicode=True,sort_keys=False)
+PY_COMPUTE_DNS
+fi
+
+if [ -n "${PKVM_PUBLIC_CIDR:-}" ]; then
+    python3 - /etc/personal-kvm/config.yaml "$PKVM_PUBLIC_CIDR" "$PKVM_NAT_CIDR" "$PKVM_INTERNAL_CIDR" "$PKVM_MGMT_CIDR" "$PKVM_IP_ALLOCATION_STRATEGY" <<'PY_COMPUTE_NETWORKS'
+from pathlib import Path
+import ipaddress,sys,yaml
+p=Path(sys.argv[1]); cidrs=sys.argv[2:6]; strategy=sys.argv[6]
+with p.open(encoding='utf-8') as stream: data=yaml.safe_load(stream) or {}
+data.setdefault('service',{})['ip_allocation_strategy']=strategy
+keys=('bridged','nat','internal','management')
+for key,cidr in zip(keys,cidrs):
+    network=ipaddress.ip_network(cidr,strict=True)
+    item=data['networks'][key]
+    item['cidr']=str(network)
+    usable=network.num_addresses-2
+    if usable < 4: raise SystemExit(f'{key} CIDR is too small')
+    first=network.network_address+1
+    if key == 'nat': item['gateway']=str(first)
+    elif key == 'internal': item['gateway']=None
+    elif key == 'management':
+        item['gateway']=None; item['host_bind_ip']=str(first)
+    start_offset=min(101,network.num_addresses-2)
+    end_offset=min(250,network.num_addresses-2)
+    item['pool_start']=str(network.network_address+start_offset)
+    item['pool_end']=str(network.network_address+end_offset)
+data['generated']={'source':'compute.yaml','schema_version':1}
+with p.open('w',encoding='utf-8') as stream:
+    yaml.safe_dump(data,stream,allow_unicode=True,sort_keys=False)
+PY_COMPUTE_NETWORKS
+fi
 
 if [ -f "${PROJECT_ROOT}/config/.env" ]; then
     cp -f "${PROJECT_ROOT}/config/.env" /etc/personal-kvm/.env
@@ -537,7 +589,8 @@ if [ "${PKVM_SETUP_BIND9:-${DNS_CONFIG[0]}}" = "1" ]; then
     echo "[DNS] Bind9 TSIG 동적 DNS 설치 및 구성..."
     DNS_FORWARD="${PKVM_DNS_FORWARD_ZONE:-${DNS_CONFIG[1]}}"
     DNS_REVERSE="${PKVM_DNS_REVERSE_ZONE:-${DNS_CONFIG[2]}}"
-    DNS_SERVER="${PKVM_DNS_SERVER_IP:-${DNS_CONFIG[3]}}"
+    DNS_SERVER="${DNS_CONFIG[3]}"
+    DNS_ZONE_NS="${PKVM_DNS_SERVER_IP:-${DNS_CLIENT_SERVER:-${DNS_CONFIG[3]}}}"
     DNS_CLIENT_SERVER="${PKVM_DNS_CLIENT_IP:-${DNS_CONFIG[4]}}"
     [ -n "$DNS_FORWARD" ] && [ -n "$DNS_REVERSE" ] && [ -n "$DNS_SERVER" ] || {
         echo '[오류] dns.enabled=true이면 server/forward_zone/reverse_zone이 필요합니다.' >&2; exit 1;
@@ -548,7 +601,16 @@ with open(sys.argv[1],encoding='utf-8') as stream: data=yaml.safe_load(stream) o
 for item in (data.get('networks') or {}).values(): print(item['cidr'])
 PY_DNS_CIDRS
 )
-    bash /opt/personal-kvm/scripts/setup_bind9.sh "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_SERVER" "$DNS_CLIENT_SERVER" "${DNS_CLIENT_CIDRS[@]}"
+    bash /opt/personal-kvm/scripts/setup_bind9.sh "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_ZONE_NS" "$DNS_CLIENT_SERVER" "${DNS_CLIENT_CIDRS[@]}"
+    if [ -n "${PKVM_PRIVATE_DOMAIN:-}" ] && [ -n "${PKVM_EXTERNAL_DOMAIN:-}" ]; then
+        python3 /opt/personal-kvm/scripts/setup_split_dns.py \
+            --private "$PKVM_PRIVATE_DOMAIN" --external "$PKVM_EXTERNAL_DOMAIN" \
+            --reverse "$DNS_REVERSE" --server "$DNS_ZONE_NS" \
+            --public "${PKVM_PUBLIC_CIDR}" \
+            --nat "$(python3 -c 'import yaml; print(yaml.safe_load(open("/etc/personal-kvm/config.yaml"))["networks"]["nat"]["cidr"])')" \
+            --internal "${PKVM_INTERNAL_CIDR}" --management "${PKVM_MGMT_CIDR}" \
+            --listen "$DNS_CLIENT_SERVER" --apply
+    fi
     python3 - /etc/personal-kvm/config.yaml "$DNS_FORWARD" "$DNS_REVERSE" "$DNS_SERVER" "$DNS_CLIENT_SERVER" <<'PY_BIND9'
 from pathlib import Path
 import os,sys,tempfile,yaml
@@ -557,6 +619,10 @@ with p.open(encoding='utf-8') as stream:
     data=yaml.safe_load(stream)
 data['dns']={'enabled':True,'server':server,'key_file':'/etc/named/pkvm/pkvm-ddns.key',
              'client_server':client_server,'forward_zone':forward,'reverse_zone':reverse,'ttl':300}
+if os.environ.get('PKVM_PRIVATE_DOMAIN'):
+    data['dns']['private_domain']=os.environ['PKVM_PRIVATE_DOMAIN']
+if os.environ.get('PKVM_EXTERNAL_DOMAIN'):
+    data['dns']['external_domain']=os.environ['PKVM_EXTERNAL_DOMAIN']
 fd,path=tempfile.mkstemp(dir=str(p.parent),prefix='.config-bind9-',text=True)
 try:
     with os.fdopen(fd,'w',encoding='utf-8') as stream:
@@ -572,6 +638,7 @@ PY_BIND9
 fi
 
 CURRENT_STAGE="nfs"
+if [ "${PKVM_SETUP_NFS:-1}" = "1" ]; then
 echo "[NFS] 관리망 공유 볼륨 서버 및 export 구성..."
 mapfile -t NFS_CONFIG < <(python3 - /etc/personal-kvm/config.yaml <<'PY_NFS_CONFIG'
 import sys,yaml
@@ -581,8 +648,10 @@ print((data.get('nfs') or {}).get('NFS_DIR') or '/data/nfs')
 print(data['networks']['management']['cidr'])
 PY_NFS_CONFIG
 )
-bash /opt/personal-kvm/scripts/setup_nfs.sh "${NFS_CONFIG[0]}" "${NFS_CONFIG[1]}"
-python3 - /etc/personal-kvm/config.yaml "${NFS_CONFIG[0]}" <<'PY_NFS_PERSIST'
+NFS_DIR="${PKVM_NFS_DIR:-${NFS_CONFIG[0]}}"
+NFS_CIDR="${PKVM_MGMT_CIDR:-${NFS_CONFIG[1]}}"
+bash /opt/personal-kvm/scripts/setup_nfs.sh "$NFS_DIR" "$NFS_CIDR"
+python3 - /etc/personal-kvm/config.yaml "$NFS_DIR" <<'PY_NFS_PERSIST'
 from pathlib import Path
 import os,sys,tempfile,yaml,grp
 p=Path(sys.argv[1]); nfs_dir=sys.argv[2]
@@ -597,11 +666,18 @@ try:
 finally:
     if os.path.exists(tmp): os.unlink(tmp)
 PY_NFS_PERSIST
+else
+    echo "[NFS] compute.yaml에서 비활성화됨"
+fi
 
 CURRENT_STAGE="load-balancers"
 echo "[LB] HAProxy L4 및 Traefik L7 런타임 구성..."
-bash /opt/personal-kvm/scripts/setup_lb.sh haproxy 8404
-bash /opt/personal-kvm/scripts/setup_lb.sh traefik 8443
+if [ "${PKVM_SETUP_HAPROXY:-1}" = "1" ]; then
+    bash /opt/personal-kvm/scripts/setup_lb.sh haproxy "${PKVM_HAPROXY_PORT:-8404}"
+fi
+if [ "${PKVM_SETUP_TRAEFIK:-1}" = "1" ]; then
+    bash /opt/personal-kvm/scripts/setup_lb.sh traefik "${PKVM_TRAEFIK_PORT:-8443}"
+fi
 
 CURRENT_STAGE="database"
 echo "[5/7] MariaDB 데이터베이스 및 계정 초기화..."

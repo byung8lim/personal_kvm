@@ -157,6 +157,8 @@ class VmProvisioner:
                     default_route_added = True
                 if net.get("dns"):
                     item["nameservers"] = {"addresses": [str(net["dns"])]}
+                    if net.get("search"):
+                        item["nameservers"]["search"] = list(net["search"])
                 ethernets[iface] = item
             network_path = folder_path / "network-config"
             network_path.write_text(yaml.safe_dump({"version": 2, "ethernets": ethernets}, sort_keys=False), encoding="utf-8")

@@ -7,6 +7,7 @@ service:
   ssh_public_key_path: "/var/lib/personal-kvm/.ssh/id_rsa.pub"
   overcommit_cpu_ratio: 2.0
   reserved_host_memory_gb: 4
+  # Generated from compute.yaml during installation. Do not edit this template.
   ip_allocation_strategy: "RANDOM"
 
 # Explicitly enable only after named zones, ACLs and TSIG key are configured.

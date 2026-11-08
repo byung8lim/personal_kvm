@@ -69,6 +69,17 @@ class Bind9Ddns:
                 pass  # Reconciler must handle the remaining A record.
             raise
 
+    def add_a(self, hostname: str, address: str) -> None:
+        """Add an A record without changing the canonical private PTR."""
+        ip = ipaddress.IPv4Address(address)
+        fqdn = _fqdn(hostname, self.forward_zone)
+        self._update(self.forward_zone, [f"update add {fqdn} {self.ttl} A {ip}"])
+
+    def remove_a(self, hostname: str, address: str) -> None:
+        ip = ipaddress.IPv4Address(address)
+        fqdn = _fqdn(hostname, self.forward_zone)
+        self._update(self.forward_zone, [f"update delete {fqdn} A {ip}"])
+
     def remove(self, hostname: str, address: str) -> None:
         ip = ipaddress.IPv4Address(address)
         fqdn = _fqdn(hostname, self.forward_zone)

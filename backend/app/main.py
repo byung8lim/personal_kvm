@@ -43,6 +43,14 @@ def configured_ddns():
     return Bind9Ddns(dns["server"], dns["key_file"], dns["forward_zone"],
                      dns["reverse_zone"], ttl=int(dns.get("ttl", 300)))
 
+def configured_external_ddns():
+    dns = runtime_config().get("dns") or {}
+    zone = dns.get("external_domain")
+    if not dns.get("enabled", False) or not zone:
+        return None
+    return Bind9Ddns(dns["server"], dns["key_file"], zone,
+                     dns["reverse_zone"], ttl=int(dns.get("ttl", 300)))
+
 app = FastAPI(title="퍼스널 KVM 가상화 서비스 API", version="0.1.9")
 
 @app.exception_handler(RequestValidationError)
@@ -606,6 +614,9 @@ def _create_worker(instance_id, operation_uuid, instance_name, image_path, root_
             progress("DNS", "내부 A/PTR 등록 중")
             updater.add(instance.dns_hostname, instance.private_ip)
             dns_registered = True
+            external_updater = configured_external_ddns()
+            if external_updater:
+                external_updater.add_a(instance.dns_hostname, instance.private_ip)
         progress("FINALIZE", "생성 결과 기록 중")
         instance = session.query(Instance).filter(Instance.id == instance_id).with_for_update().one()
         op = session.query(ResourceOperation).filter(ResourceOperation.operation_uuid == operation_uuid).with_for_update().one()
@@ -619,6 +630,9 @@ def _create_worker(instance_id, operation_uuid, instance_name, image_path, root_
         if dns_registered:
             try:
                 configured_ddns().remove(dns_hostname, instance.private_ip)
+                external_updater = configured_external_ddns()
+                if external_updater:
+                    external_updater.remove_a(dns_hostname, instance.private_ip)
             except Exception:
                 logging.exception("VM %s DNS compensation failed", instance_name)
         # Provisioner compensates its own failures; cleanup again is idempotent
@@ -811,10 +825,16 @@ def create_instance(req: CreateInstanceReq, db: Session = Depends(get_db), _admi
         extra_pool.available_size_gb -= req.extra_disk_gb
     db.commit()
     network_configs = []
+    dns_cfg = runtime_config().get("dns") or {}
     for (net, ip_row, is_default), mac in zip(selected, macs):
         prefix = net.cidr.split("/")[1]
+        search_domains = [dns_cfg.get("external_domain")]
+        if net.net_type in ("INTERNAL", "MANAGEMENT"):
+            search_domains.insert(0, dns_cfg.get("private_domain") or dns_cfg.get("forward_zone"))
+        search_domains = [domain for domain in search_domains if domain]
         network_configs.append({"mac": mac, "address": f"{ip_row.ip_address}/{prefix}",
-                                "gateway": net.gateway_ip, "dns": net.dns_server, "default": bool(is_default)})
+                                "gateway": net.gateway_ip, "dns": net.dns_server,
+                                "search": search_domains, "default": bool(is_default)})
     args = (instance_id, operation_uuid, instance_name, image.file_path, root_path,
             req.root_disk_gb, extra_path, req.extra_disk_gb, req.memory_gb, req.vcores,
             [net.bridge_name for net, _, _ in selected], macs, network_configs, seed_path,
@@ -906,6 +926,9 @@ def instance_action(instance_id: int, action: str, force: bool = False, db: Sess
             updater = configured_ddns()
             if updater and inst.private_ip:
                 updater.remove(inst.dns_hostname, inst.private_ip)
+                external_updater = configured_external_ddns()
+                if external_updater:
+                    external_updater.remove_a(inst.dns_hostname, inst.private_ip)
             op = db.query(ResourceOperation).filter(
                 ResourceOperation.operation_uuid == operation_uuid
             ).with_for_update().one()

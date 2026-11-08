@@ -1,22 +1,25 @@
 # Declarative installation input. Replace example network values before use.
 schema_version: 1
 services:
-  bind9: false
-  nfs: false
-  traefik: false
-  haproxy: false
+  bind9: true
+  nfs: true
+  traefik: true
+  haproxy: true
 domains:
-  EXTERNAL_DOMAIN: example.com
-  PRIVATE_DOMAIN: internal.example
+  EXTERNAL_DOMAIN: wbl.com
+  PRIVATE_DOMAIN: wbl.int
 network:
   public: 192.168.0.0/24
+  nat: 10.10.50.0/24
   internal: 10.10.60.0/24
   management: 10.10.70.0/24
+ipam:
+  allocation_strategy: SERIAL
 bind9:
   server_ip: 10.10.60.1
   reverse_zone: 60.10.10.in-addr.arpa
 nfs:
-  NFS_DIR: /srv/pkvm-shared
+  NFS_DIR: /data/nfsshared
 traefik:
   # Host nginx already owns 443. This port and the adjacent HTTP port must be free.
   listen_port: 8444

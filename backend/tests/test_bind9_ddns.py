@@ -23,6 +23,18 @@ class Bind9DdnsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             dns.add("vm", "10.10.60.101")
 
+    def test_add_external_alias_does_not_modify_ptr(self):
+        with tempfile.TemporaryDirectory() as root:
+            key = Path(root) / "key"; key.write_text("test")
+            dns = Bind9Ddns("127.0.0.1", str(key), "wbl.com", "60.10.10.in-addr.arpa")
+            with patch("app.services.bind9_ddns.subprocess.run") as run:
+                run.return_value.returncode = 0
+                dns.add_a("kafka04", "10.10.60.102")
+                self.assertEqual(run.call_count, 1)
+                update = run.call_args.kwargs["input"]
+                self.assertIn("kafka04.wbl.com.", update)
+                self.assertNotIn(" PTR ", update)
+
     def test_no_secret_or_stderr_leaked(self):
         with tempfile.TemporaryDirectory() as root:
             key = Path(root) / "key"; key.write_text("secret")
